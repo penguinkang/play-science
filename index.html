@@ -349,8 +349,7 @@
     let remainingCoins;
     let viewMode = "world";
     let currentTransition = null;
-    let animationFrameId = 0;
-    let animationTimeoutId = 0;
+    let activeMovementAnimation = null;
     let movement = { active: false, progress: 1, row: START_STATE[0], column: START_STATE[1] };
     const redraws = { world: 0, chart: 0 };
     let chartPoints = 0;
@@ -690,14 +689,7 @@
       drawAgent(worldContext, cellWidth, cellHeight);
     }
 
-    function renderChart() {
-      const { width, height } = prepareCanvas(rewardChart, chartContext);
-      if (width <= 0 || height <= 0) return;
-      redraws.chart += 1;
-      const values = returnHistory.slice(-50);
-      chartPoints = values.length;
-      chartContext.fillStyle = "#ffffff";
-      chartContext.fillRect(0, 0, width, height);
+    function returnChartLayout(values, width, height) {
       const padding = { top: 18, right: 14, bottom: 22, left: 42 };
       const plotWidth = Math.max(1, width - padding.left - padding.right);
       const plotHeight = Math.max(1, height - padding.top - padding.bottom);
@@ -707,21 +699,61 @@
       let maximum = Math.max(0, dataMax);
       if (minimum === maximum) { minimum -= 1; maximum += 1; }
       const yFor = (value) => padding.top + (maximum - value) / (maximum - minimum) * plotHeight;
+      const minimumLabelY = yFor(dataMin);
+      const maximumLabelY = yFor(dataMax);
+      return Object.freeze({
+        domain: Object.freeze({ minimum, maximum }),
+        plot: Object.freeze({
+          left: padding.left,
+          right: width - padding.right,
+          top: padding.top,
+          bottom: height - padding.bottom,
+          width: plotWidth,
+          height: plotHeight,
+        }),
+        labels: Object.freeze({
+          minimum: Object.freeze({
+            value: dataMin,
+            y: minimumLabelY,
+            visible: Math.abs(minimumLabelY - maximumLabelY) >= 14,
+          }),
+          maximum: Object.freeze({ value: dataMax, y: maximumLabelY, visible: true }),
+        }),
+        yFor,
+      });
+    }
+
+    function renderChart() {
+      const { width, height } = prepareCanvas(rewardChart, chartContext);
+      if (width <= 0 || height <= 0) return;
+      redraws.chart += 1;
+      const values = returnHistory.slice(-50);
+      chartPoints = values.length;
+      chartContext.fillStyle = "#ffffff";
+      chartContext.fillRect(0, 0, width, height);
+      const layout = returnChartLayout(values, width, height);
+      const { plot, labels, yFor } = layout;
 
       chartContext.strokeStyle = "#94a3b8";
       chartContext.setLineDash([4, 4]);
       chartContext.beginPath();
-      chartContext.moveTo(padding.left, yFor(0));
-      chartContext.lineTo(width - padding.right, yFor(0));
+      chartContext.moveTo(plot.left, yFor(0));
+      chartContext.lineTo(plot.right, yFor(0));
       chartContext.stroke();
       chartContext.setLineDash([]);
       chartContext.fillStyle = "#172554";
       chartContext.font = "bold 11px Courier New, monospace";
       chartContext.textAlign = "right";
-      chartContext.fillText(String(dataMax), padding.left - 6, padding.top + 4);
-      chartContext.fillText(String(dataMin), padding.left - 6, height - padding.bottom + 4);
+      chartContext.textBaseline = "middle";
+      if (labels.maximum.visible) {
+        chartContext.fillText(String(labels.maximum.value), plot.left - 6, labels.maximum.y);
+      }
+      if (labels.minimum.visible) {
+        chartContext.fillText(String(labels.minimum.value), plot.left - 6, labels.minimum.y);
+      }
       chartContext.textAlign = "left";
-      chartContext.fillText("recent returns", padding.left, height - 6);
+      chartContext.textBaseline = "alphabetic";
+      chartContext.fillText("recent returns", plot.left, height - 6);
 
       if (!values.length) return;
       chartContext.strokeStyle = "#ea580c";
@@ -730,8 +762,8 @@
       chartContext.beginPath();
       values.forEach((value, index) => {
         const x = values.length === 1
-          ? padding.left + plotWidth / 2
-          : padding.left + index / (values.length - 1) * plotWidth;
+          ? plot.left + plot.width / 2
+          : plot.left + index / (values.length - 1) * plot.width;
         const y = yFor(value);
         if (index === 0) chartContext.moveTo(x, y);
         else chartContext.lineTo(x, y);
@@ -745,11 +777,15 @@
     }
 
     function cancelMovement() {
-      if (animationFrameId) cancelAnimationFrame(animationFrameId);
-      if (animationTimeoutId) clearTimeout(animationTimeoutId);
-      animationFrameId = 0;
-      animationTimeoutId = 0;
-      if (movement) movement.active = false;
+      const animation = activeMovementAnimation;
+      if (animation) {
+        if (animation.frameId) cancelAnimationFrame(animation.frameId);
+        if (animation.timeoutId) clearTimeout(animation.timeoutId);
+        activeMovementAnimation = null;
+      }
+      const logicalState = state || START_STATE;
+      movement = { active: false, progress: 1, row: logicalState[0], column: logicalState[1] };
+      if (animation) animation.resolve(Object.freeze({ canceled: true }));
     }
 
     function animateMovement(from, to, duration) {
@@ -762,10 +798,13 @@
         movement.row = to[0];
         movement.column = to[1];
         renderWorld();
-        return Promise.resolve();
+        return Promise.resolve(Object.freeze({ canceled: false }));
       }
       return new Promise((resolve) => {
+        const animation = { resolve, frameId: 0, timeoutId: 0 };
+        activeMovementAnimation = animation;
         const frame = (timestamp) => {
+          if (activeMovementAnimation !== animation) return;
           const progress = Math.min(1, Math.max(0, (timestamp - startedAt) / movementDuration));
           movement.progress = progress;
           movement.row = from[0] + (to[0] - from[0]) * progress;
@@ -773,25 +812,26 @@
           renderWorld();
           if (progress < 1) scheduleFrame();
           else {
-            animationFrameId = 0;
-            animationTimeoutId = 0;
+            animation.frameId = 0;
+            animation.timeoutId = 0;
+            activeMovementAnimation = null;
             movement.active = false;
-            resolve();
+            resolve(Object.freeze({ canceled: false }));
           }
         };
         const scheduleFrame = () => {
           let fired = false;
           const tick = (timestamp) => {
-            if (fired || !movement.active) return;
+            if (fired || activeMovementAnimation !== animation) return;
             fired = true;
-            if (animationFrameId) cancelAnimationFrame(animationFrameId);
-            if (animationTimeoutId) clearTimeout(animationTimeoutId);
-            animationFrameId = 0;
-            animationTimeoutId = 0;
+            if (animation.frameId) cancelAnimationFrame(animation.frameId);
+            if (animation.timeoutId) clearTimeout(animation.timeoutId);
+            animation.frameId = 0;
+            animation.timeoutId = 0;
             frame(timestamp);
           };
-          animationFrameId = requestAnimationFrame(tick);
-          animationTimeoutId = window.setTimeout(() => tick(performance.now()), 32);
+          animation.frameId = requestAnimationFrame(tick);
+          animation.timeoutId = window.setTimeout(() => tick(performance.now()), 32);
         };
         scheduleFrame();
       });
@@ -803,8 +843,8 @@
       currentTransition = result.record;
       if (result.summary) renderChart();
       const speed = Number(document.querySelector("#animation-speed").value);
-      await animateMovement(result.record.state, result.record.nextState, speed);
-      return result;
+      const animation = await animateMovement(result.record.state, result.record.nextState, speed);
+      return Object.freeze({ ...result, canceled: animation.canceled });
     }
 
     function visualSnapshot() {
@@ -833,12 +873,14 @@
 
     document.querySelector("#step-button").addEventListener("click", () => { void performAnimatedStep(); });
     document.querySelector("#fast-episode-button").addEventListener("click", () => {
+      cancelMovement();
       runEpisode();
       currentTransition = null;
       movement = { active: false, progress: 1, row: state[0], column: state[1] };
       renderAll();
     });
     document.querySelector("#train-100-button").addEventListener("click", () => {
+      cancelMovement();
       for (let count = 0; count < 100; count += 1) runEpisode();
       currentTransition = null;
       movement = { active: false, progress: 1, row: state[0], column: state[1] };
@@ -875,6 +917,7 @@
       setEpsilon(value) { epsilon = value; },
       runEpisode,
       performAnimatedStep,
+      returnChartLayout,
       visualSnapshot,
     });
 
@@ -890,6 +933,7 @@
     });
 
     document.querySelector("[data-close-game]").addEventListener("click", () => {
+      cancelMovement();
       gameScreen.hidden = true;
       landingScreen.hidden = false;
       document.querySelector("[data-open-game]").focus();

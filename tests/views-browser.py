@@ -40,12 +40,26 @@ const waitUntil = async (predicate, win, limit = 180) => {
   }
   throw new Error("Timed out waiting for browser state");
 };
+const settleWithin = async (promise, win, delay = 250) => {
+  const timeout = Symbol("timeout");
+  const outcome = await Promise.race([
+    promise,
+    pause(win, delay).then(() => timeout),
+  ]);
+  check(outcome !== timeout, "canceled movement promise settles promptly");
+  return outcome;
+};
 const frame = document.createElement("iframe");
 frame.style.width = "1100px";
 frame.addEventListener("load", async () => {
   try {
     const win = frame.contentWindow;
     const doc = frame.contentDocument;
+    let unhandledRejection = null;
+    win.addEventListener("unhandledrejection", event => {
+      unhandledRejection = event.reason;
+      event.preventDefault();
+    });
     const api = win.__playScienceTest;
     check(api && typeof api.visualSnapshot === "function", "visual test API is exposed");
     doc.querySelector("[data-open-game]").click();
@@ -83,6 +97,7 @@ frame.addEventListener("load", async () => {
     const worldCanvas = doc.querySelector("#world-canvas");
     const rewardChart = doc.querySelector("#reward-chart");
     const ratio = Math.max(1, win.devicePixelRatio || 1);
+    check(ratio > 1, "browser test runs with a forced non-default DPR");
     check(visual.canvases.world.width === Math.round(worldCanvas.clientWidth * ratio),
       "world Canvas backing width follows desktop CSS width and DPR");
     check(visual.canvases.chart.height === Math.round(rewardChart.clientHeight * ratio),
@@ -126,6 +141,82 @@ frame.addEventListener("load", async () => {
     check(JSON.stringify(api.snapshot().state) === "[0,1]",
       "deterministic move finishes at its logical destination");
 
+    const beginMovement = async () => {
+      api.reset();
+      api.setEpsilon(0);
+      api.setQ([0, 0], "right", 5);
+      doc.querySelector("#animation-speed").value = "700";
+      const promise = api.performAnimatedStep();
+      await waitUntil(() => {
+        const move = api.visualSnapshot().movement;
+        return move.active && move.progress > 0 && move.progress < 1;
+      }, win);
+      return { promise };
+    };
+    let interrupted = await beginMovement();
+    api.reset();
+    let canceled = await settleWithin(interrupted.promise, win);
+    check(canceled.canceled === true, "reset reports the active movement as canceled");
+    check(!api.visualSnapshot().movement.active,
+      "reset leaves no abandoned animated movement");
+
+    interrupted = await beginMovement();
+    doc.querySelector("#fast-episode-button").click();
+    canceled = await settleWithin(interrupted.promise, win);
+    check(canceled.canceled === true, "fast episode cancels and settles active movement");
+    check(!api.visualSnapshot().movement.active,
+      "fast episode leaves no abandoned animated movement");
+
+    interrupted = await beginMovement();
+    doc.querySelector("#train-100-button").click();
+    canceled = await settleWithin(interrupted.promise, win);
+    check(canceled.canceled === true, "batch training cancels and settles active movement");
+    check(!api.visualSnapshot().movement.active,
+      "batch training leaves no abandoned animated movement");
+
+    interrupted = await beginMovement();
+    doc.querySelector("[data-close-game]").click();
+    canceled = await settleWithin(interrupted.promise, win);
+    check(canceled.canceled === true, "closing the game cancels and settles active movement");
+    check(!api.visualSnapshot().movement.active,
+      "closing the game leaves no abandoned animated movement");
+    doc.querySelector("[data-open-game]").click();
+    await waitFrames(win, 2);
+
+    const originalMatchMedia = win.matchMedia;
+    win.matchMedia = () => ({ matches: true });
+    api.reset();
+    api.setEpsilon(0);
+    api.setQ([0, 0], "right", 5);
+    const reducedMotionResult = await api.performAnimatedStep();
+    win.matchMedia = originalMatchMedia;
+    check(reducedMotionResult.canceled === false,
+      "reduced motion completes without cancellation");
+    check(!api.visualSnapshot().movement.active
+      && api.visualSnapshot().movement.progress === 1,
+      "reduced motion skips interpolation and reaches the destination");
+
+    check(typeof api.returnChartLayout === "function",
+      "return chart exposes its scale layout for regression tests");
+    const negativeChart = api.returnChartLayout([-10, -30], 600, 180);
+    check(negativeChart.domain.minimum === -30 && negativeChart.domain.maximum === 0,
+      "all-negative returns include zero in the chart domain");
+    check(negativeChart.labels.maximum.value === -10
+      && negativeChart.labels.maximum.y === negativeChart.yFor(-10)
+      && negativeChart.labels.maximum.y > negativeChart.plot.top,
+      "all-negative maximum label is positioned at its actual value");
+    const positiveChart = api.returnChartLayout([10, 30], 600, 180);
+    check(positiveChart.domain.minimum === 0 && positiveChart.domain.maximum === 30,
+      "all-positive returns include zero in the chart domain");
+    check(positiveChart.labels.minimum.value === 10
+      && positiveChart.labels.minimum.y === positiveChart.yFor(10)
+      && positiveChart.labels.minimum.y < positiveChart.plot.bottom,
+      "all-positive minimum label is positioned at its actual value");
+    const clusteredChart = api.returnChartLayout([-99, -100], 600, 180);
+    check(clusteredChart.labels.minimum.visible === false
+      && clusteredChart.labels.maximum.visible === true,
+      "chart suppresses overlapping return labels");
+
     const chartRedraws = api.visualSnapshot().redraws.chart;
     doc.querySelector("#train-100-button").click();
     await waitFrames(win, 2);
@@ -134,6 +225,7 @@ frame.addEventListener("load", async () => {
       "silent training creates return history");
     check(visual.redraws.chart > chartRedraws && visual.chartPoints > 0,
       "silent training redraws return history chart");
+    check(unhandledRejection === null, "movement cancellation causes no unhandled rejection");
 
     result.dataset.status = "pass";
     result.textContent = `PASS: ${checks.length} browser checks`;
@@ -203,6 +295,7 @@ try:
             "--no-first-run",
             "--no-default-browser-check",
             "--window-size=1440,1000",
+            "--force-device-scale-factor=2",
             f"--user-data-dir={profile}",
             "--virtual-time-budget=15000",
             "--dump-dom",

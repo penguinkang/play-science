@@ -327,6 +327,7 @@
     });
     const REWARDS = Object.freeze({ normal: -1, coin: 10, goal: 100, hazard: -50 });
     const DEFAULTS = Object.freeze({ alpha: 0.1, gamma: 0.99, epsilon: 1, epsilonDecay: 0.995 });
+    const EPSILON_MIN = 0.02;
     const MAX_EPISODE_STEPS = 100;
 
     let qTable;
@@ -338,6 +339,7 @@
     let steps;
     let episodeReturn;
     let returnHistory;
+    let remainingCoins;
 
     const stateIndex = ([row, column]) => row * GRID_COLUMNS + column;
     const actionIndex = (action) => {
@@ -372,7 +374,9 @@
       if (containsState(ENTITIES.hazards, nextState)) {
         return Object.freeze({ nextState: copyState(nextState), reward: REWARDS.hazard, terminal: true });
       }
-      if (containsState(ENTITIES.coins, nextState)) {
+      const coinIndex = remainingCoins.findIndex((coin) => sameState(coin, nextState));
+      if (coinIndex !== -1) {
+        remainingCoins.splice(coinIndex, 1);
         return Object.freeze({ nextState: copyState(nextState), reward: REWARDS.coin, terminal: false });
       }
       return Object.freeze({ nextState: copyState(nextState), reward: REWARDS.normal, terminal: false });
@@ -421,10 +425,11 @@
       const summary = Object.freeze({ return: episodeReturn, steps, terminal });
       returnHistory.push(episodeReturn);
       episodes += 1;
-      epsilon *= DEFAULTS.epsilonDecay;
+      epsilon = Math.max(EPSILON_MIN, epsilon * DEFAULTS.epsilonDecay);
       state = [...START_STATE];
       steps = 0;
       episodeReturn = 0;
+      remainingCoins = ENTITIES.coins.map((coin) => [...coin]);
       updateStats();
       return summary;
     }
@@ -460,6 +465,7 @@
       steps = 0;
       episodeReturn = 0;
       returnHistory = [];
+      remainingCoins = ENTITIES.coins.map((coin) => [...coin]);
       const alphaInput = document.querySelector("#learning-rate");
       const gammaInput = document.querySelector("#discount-rate");
       alphaInput.value = String(alpha);
@@ -479,9 +485,11 @@
         gamma,
         epsilon,
         epsilonDecay: DEFAULTS.epsilonDecay,
+        epsilonMin: EPSILON_MIN,
         episodes,
         steps,
         episodeReturn,
+        remainingCoins: remainingCoins.map((coin) => [...coin]),
         returnHistory: [...returnHistory],
         qTable: qTable.map((row) => [...row]),
       };

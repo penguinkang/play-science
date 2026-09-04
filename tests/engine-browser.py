@@ -48,6 +48,12 @@ frame.addEventListener("load", () => {
     closeTo(snapshot.gamma, 0.99, "default gamma");
     closeTo(snapshot.epsilon, 1, "default epsilon");
     closeTo(snapshot.epsilonDecay, 0.995, "default epsilon decay");
+    closeTo(snapshot.epsilonMin, 0.02, "minimum epsilon");
+    check(JSON.stringify(snapshot.remainingCoins) === "[[0,2],[3,4]]",
+      "snapshot exposes the episode's remaining coins");
+    snapshot.remainingCoins[0][0] = 99;
+    check(api.snapshot().remainingCoins[0][0] === 0,
+      "snapshot cannot mutate the engine's remaining coins");
     check(snapshot.qTable.length === 36, "Q-table has one row per state");
     check(snapshot.qTable.every(row => row.length === 4 && row.every(value => value === 0)),
       "Q-table starts at zero");
@@ -58,12 +64,21 @@ frame.addEventListener("load", () => {
 
     const coin = api.transition([0, 1], "right");
     check(coin.reward === 10 && coin.terminal === false, "coin rewards +10 without terminating");
+    const revisitedCoin = api.transition([0, 1], "right");
+    check(revisitedCoin.reward === -1 && revisitedCoin.terminal === false,
+      "a collected coin rewards -1 when revisited in the same episode");
+    api.runEpisode(() => 0);
+    const restoredCoin = api.transition([0, 1], "right");
+    check(restoredCoin.reward === 10,
+      "episode completion restores coins for the next episode");
     const hazard = api.transition([1, 3], "down");
     check(hazard.reward === -50 && hazard.terminal === true, "hazard rewards -50 and terminates");
     const goal = api.transition([5, 4], "right");
     check(goal.reward === 100 && goal.terminal === true, "goal rewards +100 and terminates");
 
     api.reset();
+    check(JSON.stringify(api.snapshot().remainingCoins) === "[[0,2],[3,4]]",
+      "full reset restores all coins");
     api.setQ([0, 0], "right", 2);
     api.setQ([0, 1], "up", 3);
     api.setQ([0, 1], "right", 8);
@@ -121,6 +136,11 @@ frame.addEventListener("load", () => {
     closeTo(snapshot.epsilon, 0.995, "episode completion decays epsilon");
     check(JSON.stringify(snapshot.state) === "[0,0]" && snapshot.steps === 0,
       "episode completion resets agent state and step count");
+
+    api.reset();
+    api.setEpsilon(0.02001);
+    api.runEpisode(() => 0);
+    closeTo(api.snapshot().epsilon, 0.02, "episode decay clamps epsilon to its minimum");
 
     api.reset();
     snapshot = api.snapshot();

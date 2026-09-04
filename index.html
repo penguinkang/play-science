@@ -310,6 +310,216 @@
   </main>
 
   <script>
+    const GRID_ROWS = 6;
+    const GRID_COLUMNS = 6;
+    const ACTIONS = Object.freeze(["up", "right", "down", "left"]);
+    const ACTION_DELTAS = Object.freeze({
+      up: Object.freeze([-1, 0]),
+      right: Object.freeze([0, 1]),
+      down: Object.freeze([1, 0]),
+      left: Object.freeze([0, -1]),
+    });
+    const START_STATE = Object.freeze([0, 0]);
+    const ENTITIES = Object.freeze({
+      coins: Object.freeze([Object.freeze([0, 2]), Object.freeze([3, 4])]),
+      hazards: Object.freeze([Object.freeze([2, 3]), Object.freeze([4, 1])]),
+      goal: Object.freeze([5, 5]),
+    });
+    const REWARDS = Object.freeze({ normal: -1, coin: 10, goal: 100, hazard: -50 });
+    const DEFAULTS = Object.freeze({ alpha: 0.1, gamma: 0.99, epsilon: 1, epsilonDecay: 0.995 });
+    const MAX_EPISODE_STEPS = 100;
+
+    let qTable;
+    let state;
+    let alpha;
+    let gamma;
+    let epsilon;
+    let episodes;
+    let steps;
+    let episodeReturn;
+    let returnHistory;
+
+    const stateIndex = ([row, column]) => row * GRID_COLUMNS + column;
+    const actionIndex = (action) => {
+      const index = ACTIONS.indexOf(action);
+      if (index === -1) throw new RangeError(`Unknown action: ${action}`);
+      return index;
+    };
+    const sameState = ([rowA, columnA], [rowB, columnB]) => rowA === rowB && columnA === columnB;
+    const containsState = (states, candidate) => states.some((item) => sameState(item, candidate));
+    const copyState = (value) => Object.freeze([...value]);
+
+    function getQ(currentState, action) {
+      return qTable[stateIndex(currentState)][actionIndex(action)];
+    }
+
+    function setQ(currentState, action, value) {
+      if (!Number.isFinite(value)) throw new TypeError("Q-value must be finite");
+      qTable[stateIndex(currentState)][actionIndex(action)] = value;
+    }
+
+    function transition(currentState, action) {
+      const delta = ACTION_DELTAS[action];
+      if (!delta) actionIndex(action);
+      const [rowDelta, columnDelta] = delta;
+      const nextState = [
+        Math.max(0, Math.min(GRID_ROWS - 1, currentState[0] + rowDelta)),
+        Math.max(0, Math.min(GRID_COLUMNS - 1, currentState[1] + columnDelta)),
+      ];
+      if (sameState(nextState, ENTITIES.goal)) {
+        return Object.freeze({ nextState: copyState(nextState), reward: REWARDS.goal, terminal: true });
+      }
+      if (containsState(ENTITIES.hazards, nextState)) {
+        return Object.freeze({ nextState: copyState(nextState), reward: REWARDS.hazard, terminal: true });
+      }
+      if (containsState(ENTITIES.coins, nextState)) {
+        return Object.freeze({ nextState: copyState(nextState), reward: REWARDS.coin, terminal: false });
+      }
+      return Object.freeze({ nextState: copyState(nextState), reward: REWARDS.normal, terminal: false });
+    }
+
+    function chooseAction(currentState, random = Math.random) {
+      if (random() < epsilon) return ACTIONS[Math.floor(random() * ACTIONS.length)];
+      const values = ACTIONS.map((action) => getQ(currentState, action));
+      const maximum = Math.max(...values);
+      const bestActions = ACTIONS.filter((_, index) => values[index] === maximum);
+      return bestActions[Math.floor(random() * bestActions.length)];
+    }
+
+    function calculateTransition({ state: currentState, action, nextState, reward, terminal }) {
+      const oldQ = getQ(currentState, action);
+      const maxNextQ = terminal ? 0 : Math.max(...ACTIONS.map((nextAction) => getQ(nextState, nextAction)));
+      const target = reward + gamma * maxNextQ;
+      const newQ = oldQ + alpha * (target - oldQ);
+      return Object.freeze({
+        state: copyState(currentState),
+        action,
+        oldQ,
+        nextState: copyState(nextState),
+        reward,
+        terminal,
+        maxNextQ,
+        target,
+        newQ,
+        deltaQ: newQ - oldQ,
+      });
+    }
+
+    function commitTransition(record) {
+      setQ(record.state, record.action, record.newQ);
+    }
+
+    function updateStats() {
+      const values = document.querySelectorAll(".stats dd");
+      values[0].textContent = String(episodes);
+      values[1].textContent = String(episodeReturn);
+      values[2].textContent = String(steps);
+      values[3].textContent = epsilon.toFixed(2);
+    }
+
+    function finishEpisode(terminal) {
+      const summary = Object.freeze({ return: episodeReturn, steps, terminal });
+      returnHistory.push(episodeReturn);
+      episodes += 1;
+      epsilon *= DEFAULTS.epsilonDecay;
+      state = [...START_STATE];
+      steps = 0;
+      episodeReturn = 0;
+      updateStats();
+      return summary;
+    }
+
+    function performStep(random = Math.random) {
+      const action = chooseAction(state, random);
+      const outcome = transition(state, action);
+      const record = calculateTransition({ state, action, ...outcome });
+      commitTransition(record);
+      state = [...outcome.nextState];
+      steps += 1;
+      episodeReturn += outcome.reward;
+      const summary = outcome.terminal || steps >= MAX_EPISODE_STEPS
+        ? finishEpisode(outcome.terminal)
+        : null;
+      updateStats();
+      return Object.freeze({ record, summary });
+    }
+
+    function runEpisode(random = Math.random) {
+      let summary = null;
+      while (!summary) summary = performStep(random).summary;
+      return summary;
+    }
+
+    function reset() {
+      qTable = Array.from({ length: GRID_ROWS * GRID_COLUMNS }, () => Array(ACTIONS.length).fill(0));
+      state = [...START_STATE];
+      alpha = DEFAULTS.alpha;
+      gamma = DEFAULTS.gamma;
+      epsilon = DEFAULTS.epsilon;
+      episodes = 0;
+      steps = 0;
+      episodeReturn = 0;
+      returnHistory = [];
+      const alphaInput = document.querySelector("#learning-rate");
+      const gammaInput = document.querySelector("#discount-rate");
+      alphaInput.value = String(alpha);
+      gammaInput.value = String(gamma);
+      alphaInput.previousElementSibling.querySelector("output").value = alpha.toFixed(2);
+      gammaInput.previousElementSibling.querySelector("output").value = gamma.toFixed(2);
+      updateStats();
+    }
+
+    function snapshot() {
+      return {
+        rows: GRID_ROWS,
+        columns: GRID_COLUMNS,
+        actions: [...ACTIONS],
+        state: [...state],
+        alpha,
+        gamma,
+        epsilon,
+        epsilonDecay: DEFAULTS.epsilonDecay,
+        episodes,
+        steps,
+        episodeReturn,
+        returnHistory: [...returnHistory],
+        qTable: qTable.map((row) => [...row]),
+      };
+    }
+
+    const learningRate = document.querySelector("#learning-rate");
+    const discountRate = document.querySelector("#discount-rate");
+    learningRate.addEventListener("input", () => {
+      alpha = Number(learningRate.value);
+      learningRate.previousElementSibling.querySelector("output").value = alpha.toFixed(2);
+    });
+    discountRate.addEventListener("input", () => {
+      gamma = Number(discountRate.value);
+      discountRate.previousElementSibling.querySelector("output").value = gamma.toFixed(2);
+    });
+
+    document.querySelector("#step-button").addEventListener("click", () => performStep());
+    document.querySelector("#fast-episode-button").addEventListener("click", () => runEpisode());
+    document.querySelector("#train-100-button").addEventListener("click", () => {
+      for (let count = 0; count < 100; count += 1) runEpisode();
+    });
+    document.querySelector("#reset-button").addEventListener("click", reset);
+
+    reset();
+
+    window.__playScienceTest = Object.freeze({
+      snapshot,
+      reset,
+      transition,
+      chooseAction,
+      calculateTransition,
+      commitTransition,
+      getQ,
+      setQ,
+      setEpsilon(value) { epsilon = value; },
+      runEpisode,
+    });
+
     const landingScreen = document.querySelector("#landing-screen");
     const gameScreen = document.querySelector("#game-screen");
 

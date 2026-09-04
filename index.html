@@ -310,9 +310,9 @@
         </div>
 
         <aside class="stack">
-          <section id="formula-inspector" class="pixel-panel section-pad" aria-labelledby="formula-title" data-inspector-phase="idle">
+          <section id="formula-inspector" class="pixel-panel section-pad" aria-labelledby="formula-title" data-inspector-phase="idle" data-value-precision="6">
             <h2 id="formula-title" class="text-xl font-black">Formula inspector</h2>
-            <p class="my-3">Follow one update from observation to reflection.</p>
+            <p class="my-3">Follow one update from observation to reflection. Values use six decimal places; ≈ marks a result rounded to that precision.</p>
             <ol>
               <li class="formula-card" data-phase="1" data-revealed="false"><strong>1. Current state</strong><p class="formula"><span class="q-value">Q(s, a)</span></p></li>
               <li class="formula-card" data-phase="2" data-revealed="false"><strong>2. Take action</strong><p class="formula"><span class="reward">R</span> and next state s′</p></li>
@@ -360,6 +360,7 @@
     const DEFAULTS = Object.freeze({ alpha: 0.1, gamma: 0.99, epsilon: 1, epsilonDecay: 0.995 });
     const EPSILON_MIN = 0.02;
     const MAX_EPISODE_STEPS = 100;
+    const VALUE_PRECISION = 6;
 
     let qTable;
     let state;
@@ -391,6 +392,7 @@
     const sameState = ([rowA, columnA], [rowB, columnB]) => rowA === rowB && columnA === columnB;
     const containsState = (states, candidate) => states.some((item) => sameState(item, candidate));
     const copyState = (value) => Object.freeze([...value]);
+    const quantizeValue = (value) => Number(value.toFixed(VALUE_PRECISION));
 
     function getQ(currentState, action) {
       return qTable[stateIndex(currentState)][actionIndex(action)];
@@ -398,7 +400,7 @@
 
     function setQ(currentState, action, value) {
       if (!Number.isFinite(value)) throw new TypeError("Q-value must be finite");
-      qTable[stateIndex(currentState)][actionIndex(action)] = value;
+      qTable[stateIndex(currentState)][actionIndex(action)] = quantizeValue(value);
     }
 
     function transition(currentState, action) {
@@ -434,8 +436,8 @@
     function calculateTransition({ state: currentState, action, nextState, reward, terminal }) {
       const oldQ = getQ(currentState, action);
       const maxNextQ = terminal ? 0 : Math.max(...ACTIONS.map((nextAction) => getQ(nextState, nextAction)));
-      const target = reward + gamma * maxNextQ;
-      const newQ = oldQ + alpha * (target - oldQ);
+      const target = quantizeValue(reward + gamma * maxNextQ);
+      const newQ = quantizeValue(oldQ + alpha * (target - oldQ));
       return Object.freeze({
         state: copyState(currentState),
         action,
@@ -446,7 +448,7 @@
         maxNextQ,
         target,
         newQ,
-        deltaQ: newQ - oldQ,
+        deltaQ: quantizeValue(newQ - oldQ),
       });
     }
 
@@ -824,8 +826,13 @@
     const phaseCards = [...inspector.querySelectorAll(".formula-card")];
     const initialFormulaMarkup = phaseCards.map((card) => card.querySelector(".formula").innerHTML);
     function formatValue(value) {
-      const rounded = Math.abs(value) < 0.0005 ? 0 : value;
-      return rounded.toFixed(3);
+      const rounded = Math.abs(value) < 0.5 * 10 ** -VALUE_PRECISION ? 0 : value;
+      return rounded.toFixed(VALUE_PRECISION);
+    }
+
+    function numericMarkup(value, className = "", extraAttributes = "") {
+      const classAttribute = className ? ` class="${className}"` : "";
+      return `<span${classAttribute} data-value="${value}"${extraAttributes}>${formatValue(value)}</span>`;
     }
 
     function formatState([row, column]) {
@@ -834,11 +841,11 @@
 
     function formulaMarkup(record) {
       return [
-        `State ${formatState(record.state)} · action ${record.action} · <span class="q-value">old Q = ${formatValue(record.oldQ)}</span>`,
+        `State ${formatState(record.state)} · action ${record.action} · <span class="q-value">old Q = ${numericMarkup(record.oldQ)}</span>`,
         `<span class="reward">R = ${record.reward}</span> · next state ${formatState(record.nextState)}`,
-        `<span class="reward">${formatValue(record.reward)}</span> + <span class="gamma">${formatValue(record.gamma)}</span> × <span class="q-value">${formatValue(record.maxNextQ)}</span> = <span class="target">${formatValue(record.target)}</span>`,
-        `(1 − <span class="alpha">${formatValue(record.alpha)}</span>) × <span class="q-value">${formatValue(record.oldQ)}</span> + <span class="alpha">${formatValue(record.alpha)}</span> × <span class="target">${formatValue(record.target)}</span> = <span class="q-value">${formatValue(record.newQ)}</span>`,
-        `<span class="q-value">${record.deltaQ >= 0 ? "+" : ""}${formatValue(record.deltaQ)}</span> · Q(${record.state[0]}, ${record.state[1]}, ${record.action}) = <span class="q-value">${formatValue(record.newQ)}</span>`,
+        `${numericMarkup(record.reward, "reward")} + ${numericMarkup(record.gamma, "gamma")} × ${numericMarkup(record.maxNextQ, "q-value")} ≈ ${numericMarkup(record.target, "target")}`,
+        `(1 − ${numericMarkup(record.alpha, "alpha")}) × ${numericMarkup(record.oldQ, "q-value")} + ${numericMarkup(record.alpha, "alpha")} × ${numericMarkup(record.target, "target")} ≈ ${numericMarkup(record.newQ, "q-value")}`,
+        `<span class="q-value">${record.deltaQ >= 0 ? "+" : ""}${numericMarkup(record.deltaQ)}</span> · Q(${record.state[0]}, ${record.state[1]}, ${record.action}) = ${numericMarkup(record.newQ, "q-value", " data-new-q")}`,
       ];
     }
 
@@ -907,7 +914,6 @@
     }
 
     function waitForPhase(duration) {
-      if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return Promise.resolve();
       return new Promise((resolve) => {
         const delay = {
           resolve,
@@ -930,7 +936,7 @@
         movement.row = to[0];
         movement.column = to[1];
         renderWorld();
-        return Promise.resolve(Object.freeze({ canceled: false }));
+        return waitForPhase(duration).then(() => Object.freeze({ canceled: false }));
       }
       return new Promise((resolve) => {
         const animation = { resolve, frameId: 0, timeoutId: 0 };

@@ -38,6 +38,10 @@ const waitUntil = async (predicate, win, limit = 500) => {
   }
   throw new Error("Timed out waiting for inspector phase");
 };
+const roundTo = (value, places) => {
+  const scale = 10 ** places;
+  return Math.round((value + Number.EPSILON) * scale) / scale;
+};
 const frame = document.createElement("iframe");
 frame.addEventListener("load", async () => {
   try {
@@ -45,6 +49,8 @@ frame.addEventListener("load", async () => {
     const doc = frame.contentDocument;
     const api = win.__playScienceTest;
     check(api && typeof api.runAnimatedStep === "function", "animated-step test API is exposed");
+    check(win.matchMedia("(prefers-reduced-motion: reduce)").matches,
+      "browser test emulates reduced motion");
     doc.querySelector("[data-open-game]").click();
     api.reset();
     api.setEpsilon(0);
@@ -56,11 +62,13 @@ frame.addEventListener("load", async () => {
     const subtitle = doc.querySelector("#subtitle");
     const seen = [];
     const subtitles = new Map();
+    const observedAt = new Map();
     const capture = () => {
       const phase = inspector.dataset.inspectorPhase;
       if (phase && seen.at(-1) !== phase) {
         seen.push(phase);
         subtitles.set(phase, subtitle.textContent.trim());
+        observedAt.set(phase, win.performance.now());
       }
     };
     const observer = new win.MutationObserver(capture);
@@ -68,10 +76,13 @@ frame.addEventListener("load", async () => {
 
     doc.querySelector("#step-button").click();
     await waitUntil(() => inspector.dataset.inspectorPhase === "1", win);
+    await pause(win, 40);
+    check(inspector.dataset.inspectorPhase === "1" && subtitle.textContent.includes("First"),
+      "reduced motion preserves readable phase timing and its subtitle");
     check(api.getQ([0, 0], "right") === 2, "Q-value is not committed during phase 1");
     check(doc.querySelector('[data-phase="1"]').textContent.includes("State (0, 0)")
       && doc.querySelector('[data-phase="1"]').textContent.includes("action right")
-      && doc.querySelector('[data-phase="1"]').textContent.includes("old Q = 2.000"),
+      && doc.querySelector('[data-phase="1"]').textContent.includes("old Q = 2.000000"),
       "phase 1 shows current coordinates, action, and old Q");
     check(doc.querySelectorAll(".formula-card").length === 5,
       "all five semantic formula cards persist throughout the animation");
@@ -91,15 +102,15 @@ frame.addEventListener("load", async () => {
 
     await waitUntil(() => inspector.dataset.inspectorPhase === "3", win);
     check(doc.querySelector('[data-phase="3"] .formula').textContent.trim()
-      === "-1.000 + 0.990 × 8.000 = 6.920",
+      === "-1.000000 + 0.990000 × 8.000000 ≈ 6.920000",
       "phase 3 substitutes R + gamma times max Q into the target");
     await waitUntil(() => inspector.dataset.inspectorPhase === "4", win);
     check(doc.querySelector('[data-phase="4"] .formula').textContent.trim()
-      === "(1 − 0.100) × 2.000 + 0.100 × 6.920 = 2.492",
+      === "(1 − 0.100000) × 2.000000 + 0.100000 × 6.920000 ≈ 2.492000",
       "phase 4 substitutes old Q, alpha, target, and new Q");
     await waitUntil(() => inspector.dataset.inspectorPhase === "5", win);
     check(doc.querySelector('[data-phase="5"] .formula').textContent.trim()
-      === "+0.492 · Q(0, 0, right) = 2.492",
+      === "+0.492000 · Q(0, 0, right) = 2.492000",
       "phase 5 shows the signed delta and committed Q-value");
     check(api.getQ([0, 0], "right") === 2.492,
       "phase 5 commits exactly the displayed Q-value");
@@ -109,6 +120,9 @@ frame.addEventListener("load", async () => {
     capture();
     check(seen.join(",") === "1,2,3,4,5,waiting",
       `inspector emits exact ordered phases (received ${seen.join(",")})`);
+    check(["1", "2", "3", "4", "5"].every((phase, index, phases) =>
+      index === phases.length - 1 || observedAt.get(phases[index + 1]) - observedAt.get(phase) >= 50),
+      "reduced motion keeps each instructional phase observable over time");
     check(["1", "2", "3", "4", "5"].every(phase =>
       subtitles.get(phase) && subtitles.get(phase).length >= 20 && !/[=×γΔ]/.test(subtitles.get(phase))),
       "every phase has a nonempty plain-language subtitle");
@@ -154,6 +168,35 @@ frame.addEventListener("load", async () => {
     check(inspector.dataset.inspectorPhase === "idle" && !api.visualSnapshot().stepBusy,
       "reset leaves the test API idle after interrupting a phase");
 
+    api.setEpsilon(0);
+    ["up", "down", "left"].forEach(action => api.setQ([0, 0], action, -3));
+    api.setQ([0, 0], "right", -2);
+    api.setQ([0, 1], "right", 0.0048);
+    doc.querySelector("#animation-speed").value = "100";
+    const precisionRun = api.runAnimatedStep();
+    await waitUntil(() => inspector.dataset.inspectorPhase === "3", win);
+    const precision = Number(inspector.dataset.valuePrecision);
+    check(precision === 6, "formula inspector documents six-decimal value precision");
+    const phase3Values = [...doc.querySelectorAll('[data-phase="3"] [data-value]')]
+      .map(node => Number(node.dataset.value));
+    check(roundTo(phase3Values[0] + phase3Values[1] * phase3Values[2], precision) === phase3Values[3],
+      "displayed target operands reproduce the displayed target at declared precision");
+    await waitUntil(() => inspector.dataset.inspectorPhase === "4", win);
+    const phase4Values = [...doc.querySelectorAll('[data-phase="4"] [data-value]')]
+      .map(node => Number(node.dataset.value));
+    check(roundTo((1 - phase4Values[0]) * phase4Values[1]
+      + phase4Values[2] * phase4Values[3], precision) === phase4Values[4],
+      "displayed update operands reproduce displayed new Q at declared precision");
+    await waitUntil(() => inspector.dataset.inspectorPhase === "5", win);
+    const shownNewQ = Number(doc.querySelector('[data-phase="5"] [data-new-q]').dataset.value);
+    check(shownNewQ === -1.899525 && api.getQ([0, 0], "right") === shownNewQ,
+      "phase 5 commits exactly the non-exact numeric new Q it displays");
+    check([...inspector.querySelectorAll("[data-value]")].every(node =>
+      Number(node.textContent) === Number(node.dataset.value)),
+      "formula text and exposed numeric operands come from the same quantized values");
+    await precisionRun;
+
+    api.reset();
     api.setEpsilon(0);
     api.setQ([0, 0], "right", 2);
     doc.querySelector("#animation-speed").value = "100";
@@ -234,6 +277,7 @@ try:
             "--disable-component-update",
             "--no-first-run",
             "--no-default-browser-check",
+            "--force-prefers-reduced-motion=reduce",
             "--window-size=430,1000",
             f"--user-data-dir={profile}",
             "--virtual-time-budget=12000",

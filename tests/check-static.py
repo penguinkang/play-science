@@ -27,21 +27,36 @@ class IdCollector(HTMLParser):
     def __init__(self) -> None:
         super().__init__()
         self.ids: list[str] = []
+        self.attributes_by_id: dict[str, dict[str, str | None]] = {}
 
     def handle_starttag(
         self, tag: str, attrs: list[tuple[str, str | None]]
     ) -> None:
-        self.ids.extend(value for name, value in attrs if name == "id" and value)
+        attributes = dict(attrs)
+        element_id = attributes.get("id")
+        if element_id:
+            self.ids.append(element_id)
+            self.attributes_by_id[element_id] = attributes
+
+
+def require(condition: bool, message: str) -> None:
+    if not condition:
+        raise RuntimeError(message)
 
 
 index_path = Path(__file__).resolve().parents[1] / "index.html"
-assert index_path.exists(), f"Missing application shell: {index_path}"
+require(index_path.exists(), f"Missing application shell: {index_path}")
 
 parser = IdCollector()
 parser.feed(index_path.read_text(encoding="utf-8"))
 
 for required_id in REQUIRED_IDS:
     count = parser.ids.count(required_id)
-    assert count == 1, f"Expected id={required_id!r} exactly once, found {count}"
+    require(count == 1, f"Expected id={required_id!r} exactly once, found {count}")
+
+require(
+    parser.attributes_by_id.get("game-title", {}).get("tabindex") == "-1",
+    "Expected #game-title to be programmatically focusable with tabindex=-1",
+)
 
 print(f"PASS: found {len(REQUIRED_IDS)} required landmarks exactly once")

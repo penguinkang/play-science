@@ -1,0 +1,337 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Learn science concepts by playing small, interactive games.">
+  <title>Play Science — Q-Learning Quest</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    :root {
+      --sky: #7dd3fc;
+      --cloud: #f8fafc;
+      --ink: #172554;
+      --grass: #65a30d;
+      --grass-dark: #3f6212;
+      --coin: #facc15;
+      --panel: #fff8dc;
+      --accent: #ea580c;
+      --shadow: #1e3a8a;
+      --border: 4px;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      min-width: 320px;
+      min-height: 100svh;
+      margin: 0;
+      color: var(--ink);
+      background:
+        radial-gradient(circle at 16% 12%, var(--cloud) 0 4rem, transparent 4.1rem),
+        radial-gradient(circle at 82% 20%, var(--cloud) 0 3rem, transparent 3.1rem),
+        linear-gradient(var(--sky) 0 72%, #bef264 72% 78%, var(--grass) 78%);
+      font-family: "Courier New", Courier, monospace;
+    }
+
+    button, summary { font: inherit; }
+
+    .page-shell {
+      width: min(1180px, calc(100% - 2rem));
+      margin-inline: auto;
+      padding-block: clamp(1.5rem, 5vw, 4rem);
+    }
+
+    .pixel-panel {
+      border: var(--border) solid var(--ink);
+      border-radius: 2px;
+      background: var(--panel);
+      box-shadow: 8px 8px 0 var(--shadow);
+    }
+
+    .pixel-button {
+      min-height: 44px;
+      border: 3px solid var(--ink);
+      padding: .65rem 1rem;
+      background: var(--coin);
+      color: var(--ink);
+      box-shadow: 4px 4px 0 var(--shadow);
+      font-weight: 900;
+      text-transform: uppercase;
+      transition: translate 100ms ease, box-shadow 100ms ease;
+    }
+
+    .pixel-button:hover { background: #fde047; }
+    .pixel-button:active { translate: 3px 3px; box-shadow: 1px 1px 0 var(--shadow); }
+    .pixel-button:focus-visible, summary:focus-visible {
+      outline: 4px solid white;
+      outline-offset: 4px;
+    }
+
+    .game-library {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(min(16rem, 100%), 1fr));
+      gap: 1.5rem;
+      margin-block-start: 2rem;
+    }
+
+    .game-tile {
+      display: flex;
+      min-height: 17rem;
+      flex-direction: column;
+      justify-content: space-between;
+      padding: 1.25rem;
+    }
+
+    .game-tile h2 { font-size: 1.35rem; font-weight: 900; }
+    .game-tile p { margin-block: .75rem; line-height: 1.6; }
+    .coming-soon { filter: saturate(.55); background: #e2e8f0; }
+    .badge {
+      width: max-content;
+      border: 2px solid currentColor;
+      padding: .2rem .5rem;
+      background: white;
+      font-size: .75rem;
+      font-weight: 900;
+      text-transform: uppercase;
+    }
+
+    .game-layout {
+      display: grid;
+      gap: 1.5rem;
+      align-items: start;
+    }
+
+    @media (min-width: 900px) {
+      .game-layout { grid-template-columns: minmax(0, 3fr) minmax(19rem, 2fr); }
+    }
+
+    .stack { display: grid; gap: 1rem; }
+    .section-pad { padding: clamp(1rem, 3vw, 1.5rem); }
+
+    canvas {
+      display: block;
+      width: 100%;
+      border: 3px solid var(--ink);
+      background: #dbeafe;
+      image-rendering: pixelated;
+    }
+
+    #world-canvas { aspect-ratio: 1 / 1; }
+    #reward-chart { min-height: 9rem; background: white; }
+
+    .control-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: .75rem;
+    }
+
+    .control-row > * { flex: 1 1 10rem; }
+    .secondary { background: #f8fafc; }
+    .danger { background: #fca5a5; }
+
+    .stats {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(8rem, 1fr));
+      gap: .5rem;
+    }
+
+    .stat {
+      border: 2px solid var(--ink);
+      padding: .65rem;
+      background: white;
+    }
+
+    .stat dt { font-size: .72rem; font-weight: 900; text-transform: uppercase; }
+    .stat dd { margin: .25rem 0 0; font-size: 1.1rem; font-weight: 900; }
+
+    #formula-inspector {
+      max-height: 72svh;
+      overflow-y: auto;
+      overflow-wrap: anywhere;
+    }
+
+    .formula-card {
+      border-inline-start: .5rem solid var(--accent);
+      padding: 1rem;
+      background: white;
+    }
+
+    .formula-card + .formula-card { margin-block-start: .75rem; }
+    .formula { margin-block-start: .5rem; font-weight: 900; line-height: 1.7; }
+    .alpha { color: #1d4ed8; }
+    .gamma { color: #7e22ce; }
+    .reward { color: #a16207; }
+    .q-value { color: #15803d; }
+    .target { color: #c2410c; }
+
+    #subtitle {
+      border: 3px solid var(--ink);
+      padding: 1rem;
+      background: #111827;
+      color: white;
+      line-height: 1.6;
+    }
+
+    details { padding: 1rem; }
+    summary { cursor: pointer; font-weight: 900; }
+    details p { margin-block-start: .75rem; line-height: 1.65; }
+
+    [hidden] { display: none !important; }
+
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { scroll-behavior: auto !important; transition: none !important; }
+    }
+  </style>
+</head>
+<body>
+  <main class="page-shell">
+    <section id="landing-screen" aria-labelledby="library-title">
+      <header class="pixel-panel section-pad text-center">
+        <p class="font-black uppercase tracking-[.2em]">Insert curiosity</p>
+        <h1 id="library-title" class="mt-2 text-4xl font-black sm:text-6xl">Play Science</h1>
+        <p class="mx-auto mt-4 max-w-2xl text-lg">Experiment, make predictions, and learn by playing.</p>
+      </header>
+
+      <div class="game-library" aria-label="Science game library">
+        <article class="game-tile pixel-panel">
+          <div>
+            <span class="badge">Playable</span>
+            <div class="mt-4 text-5xl" aria-hidden="true">🤖 🪙 🏁</div>
+            <h2 class="mt-4">Q-Learning Quest</h2>
+            <p>Guide a tiny explorer and watch rewards turn into a smarter route.</p>
+          </div>
+          <button class="pixel-button" type="button" data-open-game>Play quest</button>
+        </article>
+
+        <article class="game-tile pixel-panel coming-soon">
+          <div>
+            <span class="badge">Coming soon</span>
+            <div class="mt-4 text-5xl" aria-hidden="true">🧬</div>
+            <h2 class="mt-4">Genome Garden</h2>
+            <p>Mix traits and discover how inheritance shapes a population.</p>
+          </div>
+        </article>
+
+        <article class="game-tile pixel-panel coming-soon">
+          <div>
+            <span class="badge">Coming soon</span>
+            <div class="mt-4 text-5xl" aria-hidden="true">🪐</div>
+            <h2 class="mt-4">Orbit Lab</h2>
+            <p>Balance speed and gravity to place satellites in orbit.</p>
+          </div>
+        </article>
+      </div>
+    </section>
+
+    <section id="game-screen" aria-labelledby="game-title" hidden>
+      <header class="mb-6 flex flex-wrap items-center justify-between gap-4">
+        <div>
+          <p class="font-black uppercase tracking-[.16em]">Play Science</p>
+          <h1 id="game-title" class="text-3xl font-black sm:text-5xl">Q-Learning Quest</h1>
+        </div>
+        <button class="pixel-button secondary" type="button" data-close-game>← Game library</button>
+      </header>
+
+      <div class="game-layout">
+        <div class="stack">
+          <section class="pixel-panel section-pad" aria-labelledby="world-title">
+            <div class="mb-3 flex flex-wrap items-center justify-between gap-3">
+              <h2 id="world-title" class="text-xl font-black">Grid world</h2>
+              <div class="control-row" aria-label="World view">
+                <button class="pixel-button secondary" type="button">World</button>
+                <button class="pixel-button secondary" type="button">Q-arrows</button>
+                <button class="pixel-button secondary" type="button">Heatmap</button>
+              </div>
+            </div>
+            <canvas id="world-canvas" width="600" height="600" aria-label="Six by six Q-learning world"></canvas>
+          </section>
+
+          <section class="pixel-panel section-pad stack" aria-labelledby="training-title">
+            <h2 id="training-title" class="text-xl font-black">Training controls</h2>
+            <div class="control-row">
+              <button id="step-button" class="pixel-button" type="button">Step</button>
+              <button id="continue-button" class="pixel-button secondary" type="button" hidden>Continue</button>
+              <button id="fast-episode-button" class="pixel-button secondary" type="button">Fast episode</button>
+              <button id="train-100-button" class="pixel-button secondary" type="button">Train 100</button>
+              <button id="reset-button" class="pixel-button danger" type="button">Reset</button>
+            </div>
+
+            <dl class="stats" aria-label="Training statistics">
+              <div class="stat"><dt>Episodes</dt><dd>0</dd></div>
+              <div class="stat"><dt>Reward</dt><dd>0</dd></div>
+              <div class="stat"><dt>Steps</dt><dd>0</dd></div>
+              <div class="stat"><dt>Epsilon</dt><dd>1.00</dd></div>
+            </dl>
+
+            <label class="font-bold" for="learning-rate">Learning rate α <output>0.10</output></label>
+            <input id="learning-rate" type="range" min="0" max="1" step="0.01" value="0.1">
+            <label class="font-bold" for="discount-rate">Future reward γ <output>0.99</output></label>
+            <input id="discount-rate" type="range" min="0" max="1" step="0.01" value="0.99">
+            <label class="font-bold" for="animation-speed">Animation speed</label>
+            <input id="animation-speed" type="range" min="100" max="1500" step="100" value="700">
+          </section>
+
+          <section class="pixel-panel section-pad" aria-labelledby="returns-title">
+            <h2 id="returns-title" class="mb-3 text-xl font-black">Episode returns</h2>
+            <canvas id="reward-chart" width="600" height="180" aria-label="Recent episode reward chart"></canvas>
+          </section>
+        </div>
+
+        <aside class="stack">
+          <section id="formula-inspector" class="pixel-panel section-pad" aria-labelledby="formula-title">
+            <h2 id="formula-title" class="text-xl font-black">Formula inspector</h2>
+            <p class="my-3">Follow one update from observation to reflection.</p>
+            <ol>
+              <li class="formula-card"><strong>1. Current state</strong><p class="formula"><span class="q-value">Q(s, a)</span></p></li>
+              <li class="formula-card"><strong>2. Take action</strong><p class="formula"><span class="reward">R</span> and next state s′</p></li>
+              <li class="formula-card"><strong>3. Find the target</strong><p class="formula"><span class="target">Target</span> = <span class="reward">R</span> + <span class="gamma">γ</span> max <span class="q-value">Q(s′, a′)</span></p></li>
+              <li class="formula-card"><strong>4. Update the value</strong><p class="formula"><span class="q-value">Q new</span> = (1 − <span class="alpha">α</span>) Q old + <span class="alpha">α</span> <span class="target">Target</span></p></li>
+              <li class="formula-card"><strong>5. Reflect</strong><p class="formula">Compare the old and new Q-values.</p></li>
+            </ol>
+          </section>
+
+          <section class="pixel-panel section-pad" aria-labelledby="subtitle-title">
+            <div class="mb-3 flex flex-wrap items-center justify-between gap-3">
+              <h2 id="subtitle-title" class="text-xl font-black">Learning subtitles</h2>
+              <button id="subtitle-toggle" class="pixel-button secondary" type="button" aria-pressed="true">Subtitles on</button>
+            </div>
+            <p id="subtitle" aria-live="polite">Press Step to see how one action changes what the explorer knows.</p>
+          </section>
+
+          <details class="pixel-panel">
+            <summary>How does Q-learning work?</summary>
+            <p>The agent explores states, chooses actions, receives rewards, and stores Q-values that estimate how useful each choice may be.</p>
+            <p><strong>α</strong> controls how quickly new experience replaces old knowledge. <strong>γ</strong> controls how much future rewards matter. <strong>ε</strong> controls exploration.</p>
+          </details>
+        </aside>
+      </div>
+    </section>
+  </main>
+
+  <script>
+    const landingScreen = document.querySelector("#landing-screen");
+    const gameScreen = document.querySelector("#game-screen");
+
+    document.querySelector("[data-open-game]").addEventListener("click", () => {
+      landingScreen.hidden = true;
+      gameScreen.hidden = false;
+      document.querySelector("#game-title").focus?.();
+    });
+
+    document.querySelector("[data-close-game]").addEventListener("click", () => {
+      gameScreen.hidden = true;
+      landingScreen.hidden = false;
+      document.querySelector("[data-open-game]").focus();
+    });
+
+    document.querySelector("#subtitle-toggle").addEventListener("click", (event) => {
+      const subtitle = document.querySelector("#subtitle");
+      const isVisible = !subtitle.hidden;
+      subtitle.hidden = isVisible;
+      event.currentTarget.setAttribute("aria-pressed", String(!isVisible));
+      event.currentTarget.textContent = isVisible ? "Subtitles off" : "Subtitles on";
+    });
+  </script>
+</body>
+</html>

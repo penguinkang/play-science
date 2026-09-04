@@ -112,13 +112,20 @@
     canvas {
       display: block;
       width: 100%;
+      max-width: 100%;
       border: 3px solid var(--ink);
       background: #dbeafe;
       image-rendering: pixelated;
     }
 
     #world-canvas { aspect-ratio: 1 / 1; }
-    #reward-chart { min-height: 9rem; background: white; }
+    #reward-chart { height: 10rem; background: white; }
+
+    [data-view-mode][aria-pressed="true"] {
+      background: var(--ink);
+      color: white;
+      box-shadow: 2px 2px 0 var(--accent);
+    }
 
     .control-row {
       display: flex;
@@ -239,9 +246,9 @@
             <div class="mb-3 flex flex-wrap items-center justify-between gap-3">
               <h2 id="world-title" class="text-xl font-black">Grid world</h2>
               <div class="control-row" aria-label="World view">
-                <button class="pixel-button secondary" type="button">World</button>
-                <button class="pixel-button secondary" type="button">Q-arrows</button>
-                <button class="pixel-button secondary" type="button">Heatmap</button>
+                <button class="pixel-button secondary" type="button" data-view-mode="world" aria-pressed="true">World</button>
+                <button class="pixel-button secondary" type="button" data-view-mode="q-arrows" aria-pressed="false">Q-Arrows</button>
+                <button class="pixel-button secondary" type="button" data-view-mode="heatmap" aria-pressed="false">Heatmap</button>
               </div>
             </div>
             <canvas id="world-canvas" width="600" height="600" aria-label="Six by six Q-learning world"></canvas>
@@ -340,6 +347,13 @@
     let episodeReturn;
     let returnHistory;
     let remainingCoins;
+    let viewMode = "world";
+    let currentTransition = null;
+    let animationFrameId = 0;
+    let animationTimeoutId = 0;
+    let movement = { active: false, progress: 1, row: START_STATE[0], column: START_STATE[1] };
+    const redraws = { world: 0, chart: 0 };
+    let chartPoints = 0;
 
     const stateIndex = ([row, column]) => row * GRID_COLUMNS + column;
     const actionIndex = (action) => {
@@ -456,6 +470,7 @@
     }
 
     function reset() {
+      cancelMovement();
       qTable = Array.from({ length: GRID_ROWS * GRID_COLUMNS }, () => Array(ACTIONS.length).fill(0));
       state = [...START_STATE];
       alpha = DEFAULTS.alpha;
@@ -473,6 +488,9 @@
       alphaInput.previousElementSibling.querySelector("output").value = alpha.toFixed(2);
       gammaInput.previousElementSibling.querySelector("output").value = gamma.toFixed(2);
       updateStats();
+      currentTransition = null;
+      movement = { active: false, progress: 1, row: state[0], column: state[1] };
+      renderAll();
     }
 
     function snapshot() {
@@ -495,6 +513,313 @@
       };
     }
 
+    const worldCanvas = document.querySelector("#world-canvas");
+    const rewardChart = document.querySelector("#reward-chart");
+    const worldContext = worldCanvas.getContext("2d");
+    const chartContext = rewardChart.getContext("2d");
+
+    function canvasSize(canvas) {
+      const ratio = Math.max(1, window.devicePixelRatio || 1);
+      const cssWidth = canvas.clientWidth;
+      const cssHeight = canvas.clientHeight;
+      const width = Math.max(1, Math.round(cssWidth * ratio));
+      const height = Math.max(1, Math.round(cssHeight * ratio));
+      if (canvas.width !== width || canvas.height !== height) {
+        canvas.width = width;
+        canvas.height = height;
+      }
+      return { width: cssWidth, height: cssHeight, ratio };
+    }
+
+    function prepareCanvas(canvas, context) {
+      const size = canvasSize(canvas);
+      context.setTransform(size.ratio, 0, 0, size.ratio, 0, 0);
+      context.clearRect(0, 0, size.width, size.height);
+      return size;
+    }
+
+    function cellCenter(cell, cellWidth, cellHeight) {
+      return {
+        x: (cell[1] + 0.5) * cellWidth,
+        y: (cell[0] + 0.5) * cellHeight,
+      };
+    }
+
+    function maxQValues() {
+      return qTable.map((values) => Math.max(...values));
+    }
+
+    function drawGround(context, width, height, cellWidth, cellHeight) {
+      for (let row = 0; row < GRID_ROWS; row += 1) {
+        for (let column = 0; column < GRID_COLUMNS; column += 1) {
+          context.fillStyle = (row + column) % 2 === 0 ? "#a3e635" : "#84cc16";
+          context.fillRect(column * cellWidth, row * cellHeight, cellWidth, cellHeight);
+        }
+      }
+
+      if (viewMode === "heatmap") {
+        const values = maxQValues();
+        const minimum = Math.min(...values);
+        const maximum = Math.max(...values);
+        const range = maximum - minimum;
+        values.forEach((value, index) => {
+          const normalized = range === 0 ? 0.5 : (value - minimum) / range;
+          const row = Math.floor(index / GRID_COLUMNS);
+          const column = index % GRID_COLUMNS;
+          context.fillStyle = `hsla(${220 - normalized * 180}, 85%, 50%, .7)`;
+          context.fillRect(column * cellWidth, row * cellHeight, cellWidth, cellHeight);
+        });
+      }
+
+      context.strokeStyle = "rgba(23, 37, 84, .45)";
+      context.lineWidth = 1;
+      for (let line = 0; line <= GRID_ROWS; line += 1) {
+        context.beginPath();
+        context.moveTo(0, line * cellHeight);
+        context.lineTo(width, line * cellHeight);
+        context.stroke();
+      }
+      for (let line = 0; line <= GRID_COLUMNS; line += 1) {
+        context.beginPath();
+        context.moveTo(line * cellWidth, 0);
+        context.lineTo(line * cellWidth, height);
+        context.stroke();
+      }
+    }
+
+    function drawHighlight(context, cell, cellWidth, cellHeight, color, inset) {
+      context.save();
+      context.strokeStyle = color;
+      context.lineWidth = Math.max(2, Math.min(cellWidth, cellHeight) * 0.06);
+      context.strokeRect(
+        cell[1] * cellWidth + inset,
+        cell[0] * cellHeight + inset,
+        cellWidth - inset * 2,
+        cellHeight - inset * 2,
+      );
+      context.restore();
+    }
+
+    function drawEmoji(context, emoji, cell, cellWidth, cellHeight, scale = 0.54) {
+      const center = cellCenter(cell, cellWidth, cellHeight);
+      context.save();
+      context.font = `${Math.max(14, Math.min(cellWidth, cellHeight) * scale)}px sans-serif`;
+      context.textAlign = "center";
+      context.textBaseline = "middle";
+      context.fillText(emoji, center.x, center.y);
+      context.restore();
+    }
+
+    function drawEntities(context, cellWidth, cellHeight) {
+      remainingCoins.forEach((coin) => drawEmoji(context, "🪙", coin, cellWidth, cellHeight, 0.42));
+      ENTITIES.hazards.forEach((hazard) => drawEmoji(context, "🌋", hazard, cellWidth, cellHeight));
+      drawEmoji(context, "🏁", ENTITIES.goal, cellWidth, cellHeight);
+    }
+
+    function drawArrow(context, x, y, action, length, color, lineWidth) {
+      const [rowDelta, columnDelta] = ACTION_DELTAS[action];
+      const endX = x + columnDelta * length;
+      const endY = y + rowDelta * length;
+      const angle = Math.atan2(endY - y, endX - x);
+      const head = Math.max(3, lineWidth * 2.3);
+      context.save();
+      context.strokeStyle = color;
+      context.fillStyle = color;
+      context.lineWidth = lineWidth;
+      context.lineCap = "round";
+      context.beginPath();
+      context.moveTo(x, y);
+      context.lineTo(endX, endY);
+      context.stroke();
+      context.beginPath();
+      context.moveTo(endX, endY);
+      context.lineTo(endX - head * Math.cos(angle - Math.PI / 6), endY - head * Math.sin(angle - Math.PI / 6));
+      context.lineTo(endX - head * Math.cos(angle + Math.PI / 6), endY - head * Math.sin(angle + Math.PI / 6));
+      context.closePath();
+      context.fill();
+      context.restore();
+    }
+
+    function drawQArrows(context, cellWidth, cellHeight) {
+      const absoluteMaximum = Math.max(1, ...qTable.flat().map((value) => Math.abs(value)));
+      for (let row = 0; row < GRID_ROWS; row += 1) {
+        for (let column = 0; column < GRID_COLUMNS; column += 1) {
+          const cell = [row, column];
+          if (sameState(cell, ENTITIES.goal) || containsState(ENTITIES.hazards, cell)) continue;
+          const center = cellCenter(cell, cellWidth, cellHeight);
+          ACTIONS.forEach((action) => {
+            const value = getQ(cell, action);
+            const magnitude = Math.abs(value) / absoluteMaximum;
+            const length = Math.min(cellWidth, cellHeight) * (0.1 + magnitude * 0.26);
+            const color = value > 0 ? "#15803d" : value < 0 ? "#dc2626" : "#475569";
+            drawArrow(context, center.x, center.y, action, length, color, 1 + magnitude * 3);
+          });
+        }
+      }
+    }
+
+    function drawAgent(context, cellWidth, cellHeight) {
+      const center = cellCenter([movement.row, movement.column], cellWidth, cellHeight);
+      context.save();
+      context.fillStyle = "rgba(255, 255, 255, .85)";
+      context.beginPath();
+      context.arc(center.x, center.y, Math.min(cellWidth, cellHeight) * 0.3, 0, Math.PI * 2);
+      context.fill();
+      context.font = `${Math.max(16, Math.min(cellWidth, cellHeight) * 0.5)}px sans-serif`;
+      context.textAlign = "center";
+      context.textBaseline = "middle";
+      context.fillText("🤖", center.x, center.y);
+      context.restore();
+    }
+
+    function renderWorld() {
+      const { width, height } = prepareCanvas(worldCanvas, worldContext);
+      if (width <= 0 || height <= 0) return;
+      redraws.world += 1;
+      const cellWidth = width / GRID_COLUMNS;
+      const cellHeight = height / GRID_ROWS;
+      drawGround(worldContext, width, height, cellWidth, cellHeight);
+      if (currentTransition) {
+        drawHighlight(worldContext, currentTransition.state, cellWidth, cellHeight, "#ea580c", 4);
+        drawHighlight(worldContext, currentTransition.nextState, cellWidth, cellHeight, "#facc15", 9);
+      } else {
+        drawHighlight(worldContext, state, cellWidth, cellHeight, "#f8fafc", 5);
+      }
+      if (viewMode === "q-arrows") drawQArrows(worldContext, cellWidth, cellHeight);
+      drawEntities(worldContext, cellWidth, cellHeight);
+      drawAgent(worldContext, cellWidth, cellHeight);
+    }
+
+    function renderChart() {
+      const { width, height } = prepareCanvas(rewardChart, chartContext);
+      if (width <= 0 || height <= 0) return;
+      redraws.chart += 1;
+      const values = returnHistory.slice(-50);
+      chartPoints = values.length;
+      chartContext.fillStyle = "#ffffff";
+      chartContext.fillRect(0, 0, width, height);
+      const padding = { top: 18, right: 14, bottom: 22, left: 42 };
+      const plotWidth = Math.max(1, width - padding.left - padding.right);
+      const plotHeight = Math.max(1, height - padding.top - padding.bottom);
+      const dataMin = values.length ? Math.min(...values) : 0;
+      const dataMax = values.length ? Math.max(...values) : 0;
+      let minimum = Math.min(0, dataMin);
+      let maximum = Math.max(0, dataMax);
+      if (minimum === maximum) { minimum -= 1; maximum += 1; }
+      const yFor = (value) => padding.top + (maximum - value) / (maximum - minimum) * plotHeight;
+
+      chartContext.strokeStyle = "#94a3b8";
+      chartContext.setLineDash([4, 4]);
+      chartContext.beginPath();
+      chartContext.moveTo(padding.left, yFor(0));
+      chartContext.lineTo(width - padding.right, yFor(0));
+      chartContext.stroke();
+      chartContext.setLineDash([]);
+      chartContext.fillStyle = "#172554";
+      chartContext.font = "bold 11px Courier New, monospace";
+      chartContext.textAlign = "right";
+      chartContext.fillText(String(dataMax), padding.left - 6, padding.top + 4);
+      chartContext.fillText(String(dataMin), padding.left - 6, height - padding.bottom + 4);
+      chartContext.textAlign = "left";
+      chartContext.fillText("recent returns", padding.left, height - 6);
+
+      if (!values.length) return;
+      chartContext.strokeStyle = "#ea580c";
+      chartContext.lineWidth = 3;
+      chartContext.lineJoin = "round";
+      chartContext.beginPath();
+      values.forEach((value, index) => {
+        const x = values.length === 1
+          ? padding.left + plotWidth / 2
+          : padding.left + index / (values.length - 1) * plotWidth;
+        const y = yFor(value);
+        if (index === 0) chartContext.moveTo(x, y);
+        else chartContext.lineTo(x, y);
+      });
+      chartContext.stroke();
+    }
+
+    function renderAll() {
+      renderWorld();
+      renderChart();
+    }
+
+    function cancelMovement() {
+      if (animationFrameId) cancelAnimationFrame(animationFrameId);
+      if (animationTimeoutId) clearTimeout(animationTimeoutId);
+      animationFrameId = 0;
+      animationTimeoutId = 0;
+      if (movement) movement.active = false;
+    }
+
+    function animateMovement(from, to, duration) {
+      cancelMovement();
+      const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+      const movementDuration = reducedMotion ? 0 : Math.max(1, duration);
+      const startedAt = performance.now();
+      movement = { active: movementDuration > 0, progress: movementDuration > 0 ? 0 : 1, row: from[0], column: from[1] };
+      if (!movementDuration) {
+        movement.row = to[0];
+        movement.column = to[1];
+        renderWorld();
+        return Promise.resolve();
+      }
+      return new Promise((resolve) => {
+        const frame = (timestamp) => {
+          const progress = Math.min(1, Math.max(0, (timestamp - startedAt) / movementDuration));
+          movement.progress = progress;
+          movement.row = from[0] + (to[0] - from[0]) * progress;
+          movement.column = from[1] + (to[1] - from[1]) * progress;
+          renderWorld();
+          if (progress < 1) scheduleFrame();
+          else {
+            animationFrameId = 0;
+            animationTimeoutId = 0;
+            movement.active = false;
+            resolve();
+          }
+        };
+        const scheduleFrame = () => {
+          let fired = false;
+          const tick = (timestamp) => {
+            if (fired || !movement.active) return;
+            fired = true;
+            if (animationFrameId) cancelAnimationFrame(animationFrameId);
+            if (animationTimeoutId) clearTimeout(animationTimeoutId);
+            animationFrameId = 0;
+            animationTimeoutId = 0;
+            frame(timestamp);
+          };
+          animationFrameId = requestAnimationFrame(tick);
+          animationTimeoutId = window.setTimeout(() => tick(performance.now()), 32);
+        };
+        scheduleFrame();
+      });
+    }
+
+    async function performAnimatedStep(random = Math.random) {
+      if (movement.active) return null;
+      const result = performStep(random);
+      currentTransition = result.record;
+      if (result.summary) renderChart();
+      const speed = Number(document.querySelector("#animation-speed").value);
+      await animateMovement(result.record.state, result.record.nextState, speed);
+      return result;
+    }
+
+    function visualSnapshot() {
+      return {
+        viewMode,
+        redraws: { ...redraws },
+        canvases: {
+          world: { width: worldCanvas.width, height: worldCanvas.height },
+          chart: { width: rewardChart.width, height: rewardChart.height },
+        },
+        movement: { ...movement },
+        chartPoints,
+      };
+    }
+
     const learningRate = document.querySelector("#learning-rate");
     const discountRate = document.querySelector("#discount-rate");
     learningRate.addEventListener("input", () => {
@@ -506,14 +831,37 @@
       discountRate.previousElementSibling.querySelector("output").value = gamma.toFixed(2);
     });
 
-    document.querySelector("#step-button").addEventListener("click", () => performStep());
-    document.querySelector("#fast-episode-button").addEventListener("click", () => runEpisode());
+    document.querySelector("#step-button").addEventListener("click", () => { void performAnimatedStep(); });
+    document.querySelector("#fast-episode-button").addEventListener("click", () => {
+      runEpisode();
+      currentTransition = null;
+      movement = { active: false, progress: 1, row: state[0], column: state[1] };
+      renderAll();
+    });
     document.querySelector("#train-100-button").addEventListener("click", () => {
       for (let count = 0; count < 100; count += 1) runEpisode();
+      currentTransition = null;
+      movement = { active: false, progress: 1, row: state[0], column: state[1] };
+      renderAll();
     });
     document.querySelector("#reset-button").addEventListener("click", reset);
 
+    document.querySelectorAll("[data-view-mode]").forEach((button) => {
+      button.addEventListener("click", () => {
+        viewMode = button.dataset.viewMode;
+        document.querySelectorAll("[data-view-mode]").forEach((candidate) => {
+          candidate.setAttribute("aria-pressed", String(candidate === button));
+        });
+        renderWorld();
+      });
+    });
+
     reset();
+
+    const canvasResizeObserver = new ResizeObserver(() => renderAll());
+    canvasResizeObserver.observe(worldCanvas);
+    canvasResizeObserver.observe(rewardChart);
+    window.addEventListener("resize", renderAll);
 
     window.__playScienceTest = Object.freeze({
       snapshot,
@@ -526,6 +874,8 @@
       setQ,
       setEpsilon(value) { epsilon = value; },
       runEpisode,
+      performAnimatedStep,
+      visualSnapshot,
     });
 
     const landingScreen = document.querySelector("#landing-screen");
@@ -534,6 +884,8 @@
     document.querySelector("[data-open-game]").addEventListener("click", () => {
       landingScreen.hidden = true;
       gameScreen.hidden = false;
+      renderAll();
+      requestAnimationFrame(renderAll);
       document.querySelector("#game-title").focus?.();
     });
 

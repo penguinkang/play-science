@@ -160,15 +160,34 @@
 
     .formula-card {
       border-inline-start: .5rem solid var(--accent);
+      min-width: 0;
       padding: 1rem;
-      background: white;
+      background: #f1f5f9;
+      transition: background 160ms ease, translate 160ms ease, box-shadow 160ms ease;
     }
 
     .formula-card + .formula-card { margin-block-start: .75rem; }
-    .formula { margin-block-start: .5rem; font-weight: 900; line-height: 1.7; }
+    .formula-card[data-revealed="true"] { background: white; }
+    .formula-card.is-active {
+      translate: .2rem 0;
+      box-shadow: inset 0 0 0 3px var(--coin);
+      animation: phase-pop 260ms ease-out;
+    }
+    .formula {
+      min-width: 0;
+      margin-block-start: .5rem;
+      font-weight: 900;
+      line-height: 1.7;
+      overflow-wrap: anywhere;
+      white-space: normal;
+    }
+    @keyframes phase-pop {
+      from { translate: -.25rem 0; }
+      to { translate: .2rem 0; }
+    }
     .alpha { color: #1d4ed8; }
     .gamma { color: #7e22ce; }
-    .reward { color: #a16207; }
+    .reward { color: #92400e; }
     .q-value { color: #15803d; }
     .target { color: #c2410c; }
 
@@ -187,7 +206,12 @@
     [hidden] { display: none !important; }
 
     @media (prefers-reduced-motion: reduce) {
-      *, *::before, *::after { scroll-behavior: auto !important; transition: none !important; }
+      *, *::before, *::after {
+        animation-duration: .001ms !important;
+        animation-iteration-count: 1 !important;
+        scroll-behavior: auto !important;
+        transition: none !important;
+      }
     }
   </style>
 </head>
@@ -286,15 +310,15 @@
         </div>
 
         <aside class="stack">
-          <section id="formula-inspector" class="pixel-panel section-pad" aria-labelledby="formula-title">
+          <section id="formula-inspector" class="pixel-panel section-pad" aria-labelledby="formula-title" data-inspector-phase="idle">
             <h2 id="formula-title" class="text-xl font-black">Formula inspector</h2>
             <p class="my-3">Follow one update from observation to reflection.</p>
             <ol>
-              <li class="formula-card"><strong>1. Current state</strong><p class="formula"><span class="q-value">Q(s, a)</span></p></li>
-              <li class="formula-card"><strong>2. Take action</strong><p class="formula"><span class="reward">R</span> and next state s′</p></li>
-              <li class="formula-card"><strong>3. Find the target</strong><p class="formula"><span class="target">Target</span> = <span class="reward">R</span> + <span class="gamma">γ</span> max <span class="q-value">Q(s′, a′)</span></p></li>
-              <li class="formula-card"><strong>4. Update the value</strong><p class="formula"><span class="q-value">Q new</span> = (1 − <span class="alpha">α</span>) Q old + <span class="alpha">α</span> <span class="target">Target</span></p></li>
-              <li class="formula-card"><strong>5. Reflect</strong><p class="formula">Compare the old and new Q-values.</p></li>
+              <li class="formula-card" data-phase="1" data-revealed="false"><strong>1. Current state</strong><p class="formula"><span class="q-value">Q(s, a)</span></p></li>
+              <li class="formula-card" data-phase="2" data-revealed="false"><strong>2. Take action</strong><p class="formula"><span class="reward">R</span> and next state s′</p></li>
+              <li class="formula-card" data-phase="3" data-revealed="false"><strong>3. Find the target</strong><p class="formula"><span class="target">Target</span> = <span class="reward">R</span> + <span class="gamma">γ</span> max <span class="q-value">Q(s′, a′)</span></p></li>
+              <li class="formula-card" data-phase="4" data-revealed="false"><strong>4. Update the value</strong><p class="formula"><span class="q-value">Q new</span> = (1 − <span class="alpha">α</span>) Q old + <span class="alpha">α</span> <span class="target">Target</span></p></li>
+              <li class="formula-card" data-phase="5" data-revealed="false"><strong>5. Reflect</strong><p class="formula">Compare the old and new <span class="q-value">Q-values</span>.</p></li>
             </ol>
           </section>
 
@@ -350,6 +374,10 @@
     let viewMode = "world";
     let currentTransition = null;
     let activeMovementAnimation = null;
+    let activePhaseDelay = null;
+    let pendingAnimatedTransition = null;
+    let stepRunToken = 0;
+    let stepBusy = false;
     let movement = { active: false, progress: 1, row: START_STATE[0], column: START_STATE[1] };
     const redraws = { world: 0, chart: 0 };
     let chartPoints = 0;
@@ -469,7 +497,7 @@
     }
 
     function reset() {
-      cancelMovement();
+      cancelAnimatedRun();
       qTable = Array.from({ length: GRID_ROWS * GRID_COLUMNS }, () => Array(ACTIONS.length).fill(0));
       state = [...START_STATE];
       alpha = DEFAULTS.alpha;
@@ -489,6 +517,7 @@
       updateStats();
       currentTransition = null;
       movement = { active: false, progress: 1, row: state[0], column: state[1] };
+      resetInspector();
       renderAll();
     }
 
@@ -788,6 +817,109 @@
       if (animation) animation.resolve(Object.freeze({ canceled: true }));
     }
 
+    const inspector = document.querySelector("#formula-inspector");
+    const subtitle = document.querySelector("#subtitle");
+    const stepButton = document.querySelector("#step-button");
+    const continueButton = document.querySelector("#continue-button");
+    const phaseCards = [...inspector.querySelectorAll(".formula-card")];
+    const initialFormulaMarkup = phaseCards.map((card) => card.querySelector(".formula").innerHTML);
+    function formatValue(value) {
+      const rounded = Math.abs(value) < 0.0005 ? 0 : value;
+      return rounded.toFixed(3);
+    }
+
+    function formatState([row, column]) {
+      return `(${row}, ${column})`;
+    }
+
+    function formulaMarkup(record) {
+      return [
+        `State ${formatState(record.state)} · action ${record.action} · <span class="q-value">old Q = ${formatValue(record.oldQ)}</span>`,
+        `<span class="reward">R = ${record.reward}</span> · next state ${formatState(record.nextState)}`,
+        `<span class="reward">${formatValue(record.reward)}</span> + <span class="gamma">${formatValue(record.gamma)}</span> × <span class="q-value">${formatValue(record.maxNextQ)}</span> = <span class="target">${formatValue(record.target)}</span>`,
+        `(1 − <span class="alpha">${formatValue(record.alpha)}</span>) × <span class="q-value">${formatValue(record.oldQ)}</span> + <span class="alpha">${formatValue(record.alpha)}</span> × <span class="target">${formatValue(record.target)}</span> = <span class="q-value">${formatValue(record.newQ)}</span>`,
+        `<span class="q-value">${record.deltaQ >= 0 ? "+" : ""}${formatValue(record.deltaQ)}</span> · Q(${record.state[0]}, ${record.state[1]}, ${record.action}) = <span class="q-value">${formatValue(record.newQ)}</span>`,
+      ];
+    }
+
+    function subtitleForPhase(phase, record) {
+      const rewardWords = record.reward < 0 ? `minus ${formatValue(Math.abs(record.reward))}` : formatValue(record.reward);
+      const change = record.deltaQ > 0 ? "an increase" : record.deltaQ < 0 ? "a decrease" : "no change";
+      return {
+        1: `First, the explorer is at row ${record.state[0]}, column ${record.state[1]} and chooses ${record.action}. Its remembered value is ${formatValue(record.oldQ)}.`,
+        2: `Next, it receives a reward of ${rewardWords} and arrives at row ${record.nextState[0]}, column ${record.nextState[1]}.`,
+        3: `Now, that reward and a future value of ${formatValue(record.maxNextQ)} make a target of ${formatValue(record.target)}.`,
+        4: `Then, a learning rate of ${formatValue(record.alpha)} blends the old value into a new value of ${formatValue(record.newQ)}.`,
+        5: `Finally, it saves ${change} of ${formatValue(Math.abs(record.deltaQ))}, making this choice worth ${formatValue(record.newQ)}.`,
+      }[phase];
+    }
+
+    function setInspectorPhase(phase, record) {
+      const numericPhase = Number(phase);
+      if (record) {
+        const markup = formulaMarkup(record);
+        phaseCards.forEach((card, index) => {
+          if (index < numericPhase) card.querySelector(".formula").innerHTML = markup[index];
+        });
+      }
+      phaseCards.forEach((card, index) => {
+        const cardPhase = index + 1;
+        card.dataset.revealed = String(phase === "waiting" || cardPhase <= numericPhase);
+        card.classList.toggle("is-active", cardPhase === numericPhase);
+      });
+      const phaseSubtitle = record && subtitleForPhase(phase, record);
+      if (phaseSubtitle) subtitle.textContent = phaseSubtitle;
+      inspector.dataset.inspectorPhase = String(phase);
+    }
+
+    function resetInspector() {
+      phaseCards.forEach((card, index) => {
+        card.dataset.revealed = "false";
+        card.classList.remove("is-active");
+        card.querySelector(".formula").innerHTML = initialFormulaMarkup[index];
+      });
+      subtitle.textContent = "Press Step to see how one action changes what the explorer knows.";
+      inspector.dataset.inspectorPhase = "idle";
+      stepButton.hidden = false;
+      stepButton.disabled = false;
+      continueButton.hidden = true;
+    }
+
+    function cancelPhaseDelay() {
+      if (!activePhaseDelay) return;
+      clearTimeout(activePhaseDelay.timer);
+      const resolve = activePhaseDelay.resolve;
+      activePhaseDelay = null;
+      resolve();
+    }
+
+    function cancelAnimatedRun() {
+      stepRunToken += 1;
+      stepBusy = false;
+      if (pendingAnimatedTransition) {
+        state = [...pendingAnimatedTransition.state];
+        remainingCoins = pendingAnimatedTransition.remainingCoins.map((coin) => [...coin]);
+        pendingAnimatedTransition = null;
+        currentTransition = null;
+      }
+      cancelPhaseDelay();
+      cancelMovement();
+    }
+
+    function waitForPhase(duration) {
+      if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return Promise.resolve();
+      return new Promise((resolve) => {
+        const delay = {
+          resolve,
+          timer: window.setTimeout(() => {
+            if (activePhaseDelay === delay) activePhaseDelay = null;
+            resolve();
+          }, Math.max(1, duration)),
+        };
+        activePhaseDelay = delay;
+      });
+    }
+
     function animateMovement(from, to, duration) {
       cancelMovement();
       const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
@@ -837,15 +969,64 @@
       });
     }
 
-    async function performAnimatedStep(random = Math.random) {
-      if (movement.active) return null;
-      const result = performStep(random);
-      currentTransition = result.record;
-      if (result.summary) renderChart();
+    async function runAnimatedStep(random = Math.random) {
+      if (stepBusy) return null;
+      stepBusy = true;
+      stepButton.disabled = true;
+      continueButton.hidden = true;
+      const token = ++stepRunToken;
+      pendingAnimatedTransition = {
+        state: [...state],
+        remainingCoins: remainingCoins.map((coin) => [...coin]),
+      };
+      const action = chooseAction(state, random);
+      const outcome = transition(state, action);
+      const calculated = calculateTransition({ state, action, ...outcome });
+      const record = Object.freeze({ ...calculated, alpha, gamma });
+      currentTransition = record;
       const speed = Number(document.querySelector("#animation-speed").value);
-      const animation = await animateMovement(result.record.state, result.record.nextState, speed);
-      return Object.freeze({ ...result, canceled: animation.canceled });
+      const canceledResult = () => Object.freeze({ record, summary: null, canceled: true });
+
+      setInspectorPhase(1, record);
+      await waitForPhase(speed);
+      if (token !== stepRunToken) return canceledResult();
+
+      setInspectorPhase(2, record);
+      const animation = await animateMovement(record.state, record.nextState, speed);
+      if (animation.canceled || token !== stepRunToken) return canceledResult();
+      state = [...outcome.nextState];
+
+      setInspectorPhase(3, record);
+      await waitForPhase(speed);
+      if (token !== stepRunToken) return canceledResult();
+
+      setInspectorPhase(4, record);
+      await waitForPhase(speed);
+      if (token !== stepRunToken) return canceledResult();
+
+      commitTransition(record);
+      pendingAnimatedTransition = null;
+      steps += 1;
+      episodeReturn += outcome.reward;
+      const summary = outcome.terminal || steps >= MAX_EPISODE_STEPS
+        ? finishEpisode(outcome.terminal)
+        : null;
+      updateStats();
+      if (summary) renderChart();
+      setInspectorPhase(5, record);
+      renderWorld();
+      await waitForPhase(speed);
+      if (token !== stepRunToken) return canceledResult();
+
+      stepBusy = false;
+      stepButton.hidden = true;
+      continueButton.hidden = false;
+      subtitle.textContent = "The update is complete. Continue when you are ready for another turn.";
+      setInspectorPhase("waiting", record);
+      return Object.freeze({ record, summary, canceled: false });
     }
+
+    const performAnimatedStep = runAnimatedStep;
 
     function visualSnapshot() {
       return {
@@ -856,6 +1037,8 @@
           chart: { width: rewardChart.width, height: rewardChart.height },
         },
         movement: { ...movement },
+        stepBusy,
+        inspectorPhase: inspector.dataset.inspectorPhase,
         chartPoints,
       };
     }
@@ -871,19 +1054,21 @@
       discountRate.previousElementSibling.querySelector("output").value = gamma.toFixed(2);
     });
 
-    document.querySelector("#step-button").addEventListener("click", () => { void performAnimatedStep(); });
+    stepButton.addEventListener("click", () => { void runAnimatedStep(); });
     document.querySelector("#fast-episode-button").addEventListener("click", () => {
-      cancelMovement();
+      cancelAnimatedRun();
       runEpisode();
       currentTransition = null;
       movement = { active: false, progress: 1, row: state[0], column: state[1] };
+      resetInspector();
       renderAll();
     });
     document.querySelector("#train-100-button").addEventListener("click", () => {
-      cancelMovement();
+      cancelAnimatedRun();
       for (let count = 0; count < 100; count += 1) runEpisode();
       currentTransition = null;
       movement = { active: false, progress: 1, row: state[0], column: state[1] };
+      resetInspector();
       renderAll();
     });
     document.querySelector("#reset-button").addEventListener("click", reset);
@@ -916,6 +1101,7 @@
       setQ,
       setEpsilon(value) { epsilon = value; },
       runEpisode,
+      runAnimatedStep,
       performAnimatedStep,
       returnChartLayout,
       visualSnapshot,
@@ -933,7 +1119,8 @@
     });
 
     document.querySelector("[data-close-game]").addEventListener("click", () => {
-      cancelMovement();
+      cancelAnimatedRun();
+      resetInspector();
       gameScreen.hidden = true;
       landingScreen.hidden = false;
       document.querySelector("[data-open-game]").focus();

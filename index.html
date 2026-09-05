@@ -844,6 +844,10 @@
     const parameterInputs = [...document.querySelectorAll("#learning-rate, #discount-rate, #animation-speed")];
     const phaseCards = [...inspector.querySelectorAll(".formula-card")];
     const initialFormulaMarkup = phaseCards.map((card) => card.querySelector(".formula").innerHTML);
+    const nonContentContinuationKeys = new Set([
+      "Shift", "Control", "Alt", "Meta", "CapsLock", "AltGraph", "Fn", "FnLock",
+      "NumLock", "ScrollLock", "Symbol", "SymbolLock", "Hyper", "Super", "OS",
+    ]);
     function formatValue(value) {
       const rounded = Math.abs(value) < 0.5 * 10 ** -VALUE_PRECISION ? 0 : value;
       return rounded.toFixed(VALUE_PRECISION);
@@ -1176,7 +1180,7 @@
 
     document.addEventListener("keydown", (event) => {
       if (!activeContinuation || event.isComposing) return;
-      if (["Shift", "Control", "Alt", "Meta", "CapsLock"].includes(event.key)) return;
+      if (nonContentContinuationKeys.has(event.key)) return;
       if (event.target instanceof Element
         && event.target.closest("input, textarea, select, button, [contenteditable='true']")) return;
       resolveContinuation();

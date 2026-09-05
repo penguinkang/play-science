@@ -92,9 +92,16 @@ frame.addEventListener("load", async () => {
       && doc.querySelector("#step-button").hidden === true,
       "waiting state clearly offers Continue instead of Step");
 
-    doc.dispatchEvent(new win.KeyboardEvent("keydown", { key: "Shift", shiftKey: true, bubbles: true }));
-    await pause(win, 25);
-    check(api.visualSnapshot().inspectorPhase === "waiting", "modifier-only keys do not continue training");
+    const nonContentKeys = [
+      "Shift", "Control", "Alt", "Meta", "CapsLock", "AltGraph", "Fn", "FnLock",
+      "NumLock", "ScrollLock", "Symbol", "SymbolLock", "Hyper", "Super", "OS",
+    ];
+    for (const key of nonContentKeys) {
+      doc.dispatchEvent(new win.KeyboardEvent("keydown", { key, bubbles: true }));
+      await pause(win, 10);
+      check(api.visualSnapshot().inspectorPhase === "waiting",
+        `${key} does not continue training`);
+    }
     const slider = doc.querySelector("#learning-rate");
     slider.focus();
     slider.dispatchEvent(new win.KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true }));

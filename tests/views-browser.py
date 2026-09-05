@@ -67,7 +67,22 @@ frame.addEventListener("load", async () => {
 
     let visual = api.visualSnapshot();
     check(visual.viewMode === "world", "World is the initial active view");
+    const worldCanvas = doc.querySelector("#world-canvas");
+    const rewardChart = doc.querySelector("#reward-chart");
+    const worldSummary = doc.querySelector("#world-summary");
+    const chartSummary = doc.querySelector("#reward-chart-summary");
+    check(worldCanvas.getAttribute("aria-describedby") === "world-summary"
+      && worldSummary.textContent.includes("World view")
+      && worldSummary.textContent.includes("Agent: row 0, column 0")
+      && worldSummary.textContent.includes("Goal: row 5, column 5")
+      && worldSummary.textContent.includes("Coins remaining: row 0, column 2; row 3, column 4")
+      && worldSummary.textContent.includes("Hazards: row 2, column 3; row 4, column 1"),
+      "world Canvas describes its mode, agent, goal, coins, and hazards");
+    check(rewardChart.getAttribute("aria-describedby") === "reward-chart-summary"
+      && chartSummary.textContent.includes("No episode returns yet"),
+      "return chart exposes a no-data text alternative");
     const initialWorldRedraws = visual.redraws.world;
+    api.setQ([0, 0], "right", 5);
     const qButton = doc.querySelector('[data-view-mode="q-arrows"]');
     qButton.click();
     await waitFrames(win);
@@ -75,12 +90,21 @@ frame.addEventListener("load", async () => {
     check(visual.viewMode === "q-arrows" && visual.redraws.world > initialWorldRedraws,
       "Q-Arrows changes active mode and redraws");
     check(qButton.getAttribute("aria-pressed") === "true", "Q-Arrows exposes its active state");
+    check(worldSummary.textContent.includes("Q-Arrows view")
+      && worldSummary.textContent.includes("row 0, column 0: right, 5.000000"),
+      "Q-Arrows summary reports each cell's best action and value");
+    const qSummary = worldSummary.textContent;
     const qRedraws = visual.redraws.world;
     doc.querySelector('[data-view-mode="heatmap"]').click();
     await waitFrames(win);
     visual = api.visualSnapshot();
     check(visual.viewMode === "heatmap" && visual.redraws.world > qRedraws,
       "Heatmap changes active mode and redraws");
+    check(worldSummary.textContent !== qSummary
+      && worldSummary.textContent.includes("Heatmap view")
+      && worldSummary.textContent.includes("maximum Q range: 0.000000 to 5.000000")
+      && worldSummary.textContent.includes("Current cell maximum Q: 5.000000"),
+      "Heatmap summary reports the max-Q range and current-cell value");
     const heatmapRedraws = visual.redraws.world;
     const worldButton = doc.querySelector('[data-view-mode="world"]');
     worldButton.click();
@@ -94,8 +118,6 @@ frame.addEventListener("load", async () => {
       "world Canvas has desktop backing dimensions");
     check(visual.canvases.chart.width > 0 && visual.canvases.chart.height > 0,
       "return chart has desktop backing dimensions");
-    const worldCanvas = doc.querySelector("#world-canvas");
-    const rewardChart = doc.querySelector("#reward-chart");
     const ratio = Math.max(1, win.devicePixelRatio || 1);
     check(ratio > 1, "browser test runs with a forced non-default DPR");
     check(visual.canvases.world.width === Math.round(worldCanvas.clientWidth * ratio),
@@ -140,6 +162,8 @@ frame.addEventListener("load", async () => {
     await waitUntil(() => !api.visualSnapshot().movement.active, win);
     check(JSON.stringify(api.snapshot().state) === "[0,1]",
       "deterministic move finishes at its logical destination");
+    check(worldSummary.textContent.includes("Agent: row 0, column 1"),
+      "world summary updates after a state transition");
 
     const beginMovement = async () => {
       api.reset();
@@ -226,6 +250,15 @@ frame.addEventListener("load", async () => {
       "silent training creates return history");
     check(visual.redraws.chart > chartRedraws && visual.chartPoints > 0,
       "silent training redraws return history chart");
+    check(!chartSummary.textContent.includes("No episode returns yet")
+      && chartSummary.textContent.includes("Recent returns")
+      && /Trend: (improving|declining|steady)/.test(chartSummary.textContent),
+      "return chart summary exposes recent values and their trend");
+    api.reset();
+    check(chartSummary.textContent.includes("No episode returns yet")
+      && worldSummary.textContent.includes("World view")
+      && worldSummary.textContent.includes("Agent: row 0, column 0"),
+      "reset restores both Canvas text alternatives");
     check(unhandledRejection === null, "movement cancellation causes no unhandled rejection");
 
     result.dataset.status = "pass";

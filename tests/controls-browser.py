@@ -54,6 +54,9 @@ frame.addEventListener("load", async () => {
     ["up", "down", "left"].forEach(action => api.setQ([0, 0], action, -2));
     api.setQ([0, 0], "right", 1);
     const beforeAnimatedControls = api.snapshot();
+    doc.querySelector("#step-button").focus();
+    check(doc.activeElement === doc.querySelector("#step-button"),
+      "Step starts the paced transition with keyboard focus");
     const paced = api.runAnimatedStep();
     check(api.visualSnapshot().inspectorPhase === "1",
       "animated training enters phase 1 synchronously");
@@ -91,10 +94,26 @@ frame.addEventListener("load", async () => {
     check(doc.querySelector("#continue-button").hidden === false
       && doc.querySelector("#step-button").hidden === true,
       "waiting state clearly offers Continue instead of Step");
+    check(doc.activeElement === doc.querySelector("#continue-button"),
+      "waiting moves focus from the hidden Step button to Continue");
+
+    const tabEvent = new win.KeyboardEvent("keydown", {
+      key: "Tab", bubbles: true, cancelable: true,
+    });
+    const tabAllowed = doc.querySelector("#continue-button").dispatchEvent(tabEvent);
+    await pause(win, 10);
+    check(tabAllowed && !tabEvent.defaultPrevented
+      && api.visualSnapshot().inspectorPhase === "waiting",
+      "Tab remains available for focus navigation and does not continue training");
+    doc.querySelector("#reset-button").focus();
+    check(doc.activeElement === doc.querySelector("#reset-button"),
+      "focus can navigate from Continue to the next enabled visible control");
 
     const nonContentKeys = [
       "Shift", "Control", "Alt", "Meta", "CapsLock", "AltGraph", "Fn", "FnLock",
       "NumLock", "ScrollLock", "Symbol", "SymbolLock", "Hyper", "Super", "OS",
+      "Tab", "Escape", "ArrowUp", "ArrowRight", "ArrowDown", "ArrowLeft",
+      "Home", "End", "PageUp", "PageDown", "Insert", "ContextMenu", "PrintScreen",
     ];
     for (const key of nonContentKeys) {
       doc.dispatchEvent(new win.KeyboardEvent("keydown", { key, bubbles: true }));
@@ -118,6 +137,8 @@ frame.addEventListener("load", async () => {
     await waitUntil(() => api.visualSnapshot().inspectorPhase === "idle", win, "keyboard continuation");
     check(!pacedResult.canceled,
       "a non-modifier document key resolves the paced wait");
+    check(doc.activeElement === doc.querySelector("#step-button"),
+      "character continuation returns focus to the visible Step control");
 
     const continued = api.runAnimatedStep();
     await waitUntil(() => api.visualSnapshot().inspectorPhase === "waiting", win, "button waiting state");
@@ -126,6 +147,8 @@ frame.addEventListener("load", async () => {
     await waitUntil(() => api.visualSnapshot().inspectorPhase === "idle", win, "button continuation");
     check(api.visualSnapshot().inspectorPhase === "idle",
       "the separate Continue button resolves the paced wait");
+    check(doc.activeElement === doc.querySelector("#step-button"),
+      "Continue returns focus to the visible Step control");
 
     const clicked = api.runAnimatedStep();
     await waitUntil(() => api.visualSnapshot().inspectorPhase === "waiting", win, "pointer waiting state");

@@ -21,12 +21,20 @@ CHROME_CANDIDATES = (
 
 ERROR_CAPTURE = r"""<script>
 window.__task6Errors = [];
-window.addEventListener("error", event => window.__task6Errors.push(`page: ${event.message}`));
+window.__task6Warnings = [];
+window.addEventListener("error", event => window.__task6Errors.push(
+  event.message ? `page: ${event.message}` : `resource: ${event.target?.src || event.target?.href || "unknown"}`
+), true);
 window.addEventListener("unhandledrejection", event => window.__task6Errors.push(`promise: ${event.reason}`));
 const originalConsoleError = console.error;
 console.error = (...args) => {
   window.__task6Errors.push(`console: ${args.map(String).join(" ")}`);
   originalConsoleError.apply(console, args);
+};
+const originalConsoleWarn = console.warn;
+console.warn = (...args) => {
+  window.__task6Warnings.push(`console: ${args.map(String).join(" ")}`);
+  originalConsoleWarn.apply(console, args);
 };
 </script>"""
 
@@ -57,6 +65,10 @@ frame.addEventListener("load", async () => {
     const doc = frame.contentDocument;
     const api = win.__playScienceTest;
     check(api && typeof api.snapshot === "function", "test API is available");
+    await waitUntil(() => win.getComputedStyle(doc.querySelector("#library-title")).marginTop === "8px",
+      win, "Tailwind CDN styles to apply");
+    check(win.getComputedStyle(doc.querySelector("#library-title")).fontWeight === "900",
+      "production Tailwind CDN utilities are applied");
 
     doc.querySelector("[data-open-game]").click();
     await pause(win);
@@ -106,8 +118,14 @@ frame.addEventListener("load", async () => {
     doc.querySelector("#animation-speed").value = "100";
     await api.performAnimatedStep(() => 0);
     await waitUntil(() => api.visualSnapshot().inspectorPhase === "idle", win, "animated core flow to settle");
-    check(win.__task6Errors.length === 0,
-      `core flow has no console or page errors: ${win.__task6Errors.join(" | ")}`);
+    const allowedWarnings = win.__task6Warnings.filter(message =>
+      message.includes("cdn.tailwindcss.com should not be used in production"));
+    const unexpectedWarnings = win.__task6Warnings.filter(message =>
+      !message.includes("cdn.tailwindcss.com should not be used in production"));
+    check(allowedWarnings.length === 1,
+      `Tailwind CDN emits its single unavoidable production advisory: ${win.__task6Warnings.join(" | ")}`);
+    check(win.__task6Errors.length === 0 && unexpectedWarnings.length === 0,
+      `core flow has no unexpected warnings or errors: ${[...win.__task6Errors, ...unexpectedWarnings].join(" | ")}`);
 
     doc.querySelector("[data-close-game]").click();
     check(doc.querySelector("#game-screen").hidden
@@ -146,10 +164,6 @@ class TestHandler(http.server.SimpleHTTPRequestHandler):
             return
         if self.path == "/index.html":
             source = (ROOT / "index.html").read_text(encoding="utf-8")
-            source = source.replace(
-                '<script src="https://cdn.tailwindcss.com"></script>',
-                "<!-- Tailwind CDN omitted by browser test server -->",
-            )
             source = source.replace("<head>", f"<head>{ERROR_CAPTURE}", 1)
             self.send_html(source.encode())
             return

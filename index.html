@@ -126,6 +126,18 @@
     #world-canvas { aspect-ratio: 1 / 1; }
     #reward-chart { height: 10rem; background: white; }
 
+    .sr-only {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      padding: 0;
+      margin: -1px;
+      overflow: hidden;
+      clip: rect(0, 0, 0, 0);
+      white-space: nowrap;
+      border: 0;
+    }
+
     [data-view-mode][aria-pressed="true"] {
       background: var(--ink);
       color: white;
@@ -313,7 +325,8 @@
                 <button class="pixel-button secondary" type="button" data-view-mode="heatmap" aria-pressed="false">Heatmap</button>
               </div>
             </div>
-            <canvas id="world-canvas" width="600" height="600" role="img" tabindex="0" aria-label="Six by six Q-learning world. When training pauses, focus here and press any non-modifier key to continue."></canvas>
+            <canvas id="world-canvas" width="600" height="600" role="img" tabindex="0" aria-label="Six by six Q-learning world. When training pauses, focus here and press a character key to continue." aria-describedby="world-summary"></canvas>
+            <p id="world-summary" class="sr-only"></p>
           </section>
 
           <section class="pixel-panel section-pad stack" aria-labelledby="training-title">
@@ -346,7 +359,8 @@
 
           <section class="pixel-panel section-pad" aria-labelledby="returns-title">
             <h2 id="returns-title" class="mb-3 text-xl font-black">Episode returns</h2>
-            <canvas id="reward-chart" width="600" height="180" aria-label="Recent episode reward chart"></canvas>
+            <canvas id="reward-chart" width="600" height="180" role="img" aria-label="Recent episode reward chart" aria-describedby="reward-chart-summary"></canvas>
+            <p id="reward-chart-summary" class="sr-only"></p>
           </section>
         </div>
 
@@ -621,6 +635,8 @@
 
     const worldCanvas = document.querySelector("#world-canvas");
     const rewardChart = document.querySelector("#reward-chart");
+    const worldSummary = document.querySelector("#world-summary");
+    const rewardChartSummary = document.querySelector("#reward-chart-summary");
     const worldContext = worldCanvas.getContext("2d");
     const chartContext = rewardChart.getContext("2d");
 
@@ -653,6 +669,37 @@
 
     function maxQValues() {
       return qTable.map((values) => Math.max(...values));
+    }
+
+    const describeCell = ([row, column]) => `row ${row}, column ${column}`;
+
+    function updateWorldSummary() {
+      const coins = remainingCoins.length
+        ? remainingCoins.map(describeCell).join("; ")
+        : "none";
+      const hazards = ENTITIES.hazards.map(describeCell).join("; ");
+      let modeDescription;
+      if (viewMode === "q-arrows") {
+        const bestActions = [];
+        for (let row = 0; row < GRID_ROWS; row += 1) {
+          for (let column = 0; column < GRID_COLUMNS; column += 1) {
+            const cell = [row, column];
+            if (sameState(cell, ENTITIES.goal) || containsState(ENTITIES.hazards, cell)) continue;
+            const values = ACTIONS.map((action) => getQ(cell, action));
+            const maximum = Math.max(...values);
+            bestActions.push(`${describeCell(cell)}: ${ACTIONS[values.indexOf(maximum)]}, ${formatValue(maximum)}`);
+          }
+        }
+        modeDescription = `Q-Arrows view. Best action and value by cell: ${bestActions.join("; ")}.`;
+      } else if (viewMode === "heatmap") {
+        const values = maxQValues();
+        modeDescription = `Heatmap view. State maximum Q range: ${formatValue(Math.min(...values))} to ${formatValue(Math.max(...values))}. Current cell maximum Q: ${formatValue(Math.max(...qTable[stateIndex(state)]))}.`;
+      } else if (currentTransition) {
+        modeDescription = `World view. Current transition: ${describeCell(currentTransition.state)} moving ${currentTransition.action} to ${describeCell(currentTransition.nextState)}, reward ${currentTransition.reward}.`;
+      } else {
+        modeDescription = "World view. Shows the explorer and reward locations.";
+      }
+      worldSummary.textContent = `${modeDescription} Agent: ${describeCell(state)}. Goal: ${describeCell(ENTITIES.goal)}. Coins remaining: ${coins}. Hazards: ${hazards}.`;
     }
 
     function drawGround(context, width, height, cellWidth, cellHeight) {
@@ -779,6 +826,7 @@
     }
 
     function renderWorld() {
+      updateWorldSummary();
       const { width, height } = prepareCanvas(worldCanvas, worldContext);
       if (width <= 0 || height <= 0) return;
       redraws.world += 1;
@@ -831,10 +879,18 @@
     }
 
     function renderChart() {
+      const values = returnHistory.slice(-50);
+      if (!values.length) {
+        rewardChartSummary.textContent = "No episode returns yet.";
+      } else {
+        const recent = values.slice(-10);
+        const difference = values.at(-1) - values[0];
+        const trend = difference > 0 ? "improving" : difference < 0 ? "declining" : "steady";
+        rewardChartSummary.textContent = `Recent returns (${recent.length} of ${values.length} shown): ${recent.join(", ")}. Trend: ${trend}.`;
+      }
       const { width, height } = prepareCanvas(rewardChart, chartContext);
       if (width <= 0 || height <= 0) return;
       redraws.chart += 1;
-      const values = returnHistory.slice(-50);
       chartPoints = values.length;
       chartContext.fillStyle = "#ffffff";
       chartContext.fillRect(0, 0, width, height);
@@ -909,6 +965,8 @@
     const nonContentContinuationKeys = new Set([
       "Shift", "Control", "Alt", "Meta", "CapsLock", "AltGraph", "Fn", "FnLock",
       "NumLock", "ScrollLock", "Symbol", "SymbolLock", "Hyper", "Super", "OS",
+      "Tab", "Escape", "ArrowUp", "ArrowRight", "ArrowDown", "ArrowLeft",
+      "Home", "End", "PageUp", "PageDown", "Insert", "ContextMenu", "PrintScreen",
     ]);
     function formatValue(value) {
       const rounded = Math.abs(value) < 0.5 * 10 ** -VALUE_PRECISION ? 0 : value;
@@ -1036,6 +1094,7 @@
       resetInspector();
       setControlsRunning(false);
       renderAll();
+      stepButton.focus();
     }
 
     function waitForPhase(duration) {
@@ -1126,6 +1185,7 @@
       const animation = await animateMovement(record.state, record.nextState, speed);
       if (animation.canceled || token !== stepRunToken) return canceledResult();
       state = [...outcome.nextState];
+      renderWorld();
 
       setInspectorPhase(3, record);
       await waitForPhase(speed);
@@ -1153,6 +1213,7 @@
       stepButton.hidden = true;
       continueButton.hidden = false;
       waitingStatus.hidden = false;
+      continueButton.focus();
       setControlsRunning(true);
       subtitle.textContent = "Training is waiting. Press Continue, any non-modifier key, or the world when you are ready.";
       setInspectorPhase("waiting", record);
@@ -1242,7 +1303,8 @@
 
     document.addEventListener("keydown", (event) => {
       if (!activeContinuation || event.isComposing) return;
-      if (nonContentContinuationKeys.has(event.key)) return;
+      if (event.ctrlKey || event.altKey || event.metaKey
+        || nonContentContinuationKeys.has(event.key) || /^F\d{1,2}$/.test(event.key)) return;
       if (event.target instanceof Element
         && event.target.closest("input, textarea, select, button, [contenteditable='true']")) return;
       resolveContinuation();

@@ -61,7 +61,7 @@ Then open [http://localhost:8000](http://localhost:8000).
 
 GitHub Pages URL: <https://penguinkang.github.io/play-science/>
 
-The repository's deployment workflow is added separately from the application work.
+The GitHub Pages workflow publishes the static site after pushes to `main`. It can also be run manually from the Actions tab.
 
 ## Technology
 

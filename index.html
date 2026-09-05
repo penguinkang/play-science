@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="description" content="Learn science concepts by playing small, interactive games.">
+  <meta name="description" content="Learn Q-learning by guiding an explorer through an interactive grid world.">
   <title>Play Science — Q-Learning Quest</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <style>
@@ -22,8 +22,9 @@
 
     * { box-sizing: border-box; }
 
+    html { overflow-x: clip; }
+
     body {
-      min-width: 320px;
       min-height: 100svh;
       margin: 0;
       color: var(--ink);
@@ -32,12 +33,13 @@
         radial-gradient(circle at 82% 20%, var(--cloud) 0 3rem, transparent 3.1rem),
         linear-gradient(var(--sky) 0 72%, #bef264 72% 78%, var(--grass) 78%);
       font-family: "Courier New", Courier, monospace;
+      font-size: clamp(.9375rem, .9rem + .2vw, 1rem);
     }
 
     button, summary { font: inherit; }
 
     .page-shell {
-      width: min(1180px, calc(100% - 2rem));
+      width: min(1180px, calc(100% - clamp(1.25rem, 4vw, 2rem)));
       margin-inline: auto;
       padding-block: clamp(1.5rem, 5vw, 4rem);
     }
@@ -63,9 +65,10 @@
 
     .pixel-button:hover { background: #fde047; }
     .pixel-button:active { translate: 3px 3px; box-shadow: 1px 1px 0 var(--shadow); }
-    .pixel-button:focus-visible, summary:focus-visible {
+    .pixel-button:focus-visible, summary:focus-visible, input:focus-visible, canvas:focus-visible {
       outline: 4px solid white;
-      outline-offset: 4px;
+      outline-offset: 3px;
+      box-shadow: 0 0 0 7px var(--ink);
     }
 
     .game-library {
@@ -101,6 +104,8 @@
       gap: 1.5rem;
       align-items: start;
     }
+
+    .game-layout > *, .stack, aside { min-width: 0; }
 
     @media (min-width: 900px) {
       .game-layout { grid-template-columns: minmax(0, 3fr) minmax(19rem, 2fr); }
@@ -165,6 +170,8 @@
       max-height: 72svh;
       overflow-y: auto;
       overflow-wrap: anywhere;
+      overscroll-behavior: contain;
+      scrollbar-gutter: stable;
     }
 
     .formula-card {
@@ -208,9 +215,31 @@
       line-height: 1.6;
     }
 
-    details { padding: 1rem; }
+    details { padding: clamp(1rem, 3vw, 1.5rem); }
     summary { cursor: pointer; font-weight: 900; }
     details p { margin-block-start: .75rem; line-height: 1.65; }
+    .tutorial-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(min(13rem, 100%), 1fr));
+      gap: .75rem;
+      margin-block-start: 1rem;
+    }
+    .tutorial-term {
+      border: 2px solid var(--ink);
+      padding: .75rem;
+      background: white;
+    }
+    .tutorial-term dt { font-weight: 900; }
+    .tutorial-term dd { margin: .35rem 0 0; line-height: 1.55; }
+
+    @media (max-width: 479px) {
+      .page-shell { padding-block: 1rem 2rem; }
+      .pixel-panel { box-shadow: 5px 5px 0 var(--shadow); }
+      .game-library, .game-layout { gap: 1rem; }
+      .game-tile { min-height: 15rem; padding: 1rem; }
+      .control-row { gap: .6rem; }
+      .control-row > * { flex-basis: 8.5rem; padding-inline: .65rem; }
+    }
 
     [hidden] { display: none !important; }
 
@@ -270,7 +299,7 @@
           <p class="font-black uppercase tracking-[.16em]">Play Science</p>
           <h1 id="game-title" tabindex="-1" class="text-3xl font-black sm:text-5xl">Q-Learning Quest</h1>
         </div>
-        <button class="pixel-button secondary" type="button" data-close-game>← Game library</button>
+        <button class="pixel-button secondary" type="button" data-close-game>← Back to game library</button>
       </header>
 
       <div class="game-layout">
@@ -278,18 +307,18 @@
           <section class="pixel-panel section-pad" aria-labelledby="world-title">
             <div class="mb-3 flex flex-wrap items-center justify-between gap-3">
               <h2 id="world-title" class="text-xl font-black">Grid world</h2>
-              <div class="control-row" aria-label="World view">
+              <div class="control-row" role="group" aria-label="World view">
                 <button class="pixel-button secondary" type="button" data-view-mode="world" aria-pressed="true">World</button>
                 <button class="pixel-button secondary" type="button" data-view-mode="q-arrows" aria-pressed="false">Q-Arrows</button>
                 <button class="pixel-button secondary" type="button" data-view-mode="heatmap" aria-pressed="false">Heatmap</button>
               </div>
             </div>
-            <canvas id="world-canvas" width="600" height="600" aria-label="Six by six Q-learning world"></canvas>
+            <canvas id="world-canvas" width="600" height="600" role="img" tabindex="0" aria-label="Six by six Q-learning world. When training pauses, focus here and press any non-modifier key to continue."></canvas>
           </section>
 
           <section class="pixel-panel section-pad stack" aria-labelledby="training-title">
             <h2 id="training-title" class="text-xl font-black">Training controls</h2>
-            <div class="control-row">
+            <div class="control-row" role="group" aria-label="Training actions">
               <button id="step-button" class="pixel-button" type="button">Step</button>
               <button id="continue-button" class="pixel-button secondary" type="button" hidden>Continue</button>
               <button id="fast-episode-button" class="pixel-button secondary" type="button">Fast episode</button>
@@ -339,13 +368,46 @@
               <h2 id="subtitle-title" class="text-xl font-black">Learning subtitles</h2>
               <button id="subtitle-toggle" class="pixel-button secondary" type="button" aria-pressed="true">Subtitles on</button>
             </div>
-            <p id="subtitle" aria-live="polite">Press Step to see how one action changes what the explorer knows.</p>
+            <p id="subtitle" role="status" aria-live="polite" aria-atomic="true">Press Step to see how one action changes what the explorer knows.</p>
           </section>
 
-          <details class="pixel-panel">
+          <details id="q-learning-tutorial" class="pixel-panel">
             <summary>How does Q-learning work?</summary>
-            <p>The agent explores states, chooses actions, receives rewards, and stores Q-values that estimate how useful each choice may be.</p>
-            <p><strong>α</strong> controls how quickly new experience replaces old knowledge. <strong>γ</strong> controls how much future rewards matter. <strong>ε</strong> controls exploration.</p>
+            <p>Q-learning lets the explorer learn by trying moves, seeing what happens, and updating one remembered value at a time. The five cards in the Formula inspector show that loop.</p>
+            <dl class="tutorial-grid">
+              <div class="tutorial-term" data-tutorial-term="agent">
+                <dt>Agent</dt>
+                <dd>The robot explorer that learns which route to take.</dd>
+              </div>
+              <div class="tutorial-term" data-tutorial-term="state">
+                <dt>State (s)</dt>
+                <dd>The explorer’s current grid square—the situation it observes before moving.</dd>
+              </div>
+              <div class="tutorial-term" data-tutorial-term="action">
+                <dt>Action (a)</dt>
+                <dd>One move up, right, down, or left chosen from the current state.</dd>
+              </div>
+              <div class="tutorial-term" data-tutorial-term="reward">
+                <dt>Reward (R)</dt>
+                <dd>Immediate feedback: −1 for a move, +10 for a coin, −50 for a hazard, or +100 for the goal.</dd>
+              </div>
+              <div class="tutorial-term" data-tutorial-term="q-value">
+                <dt>Q-value: Q(s, a)</dt>
+                <dd>A learned estimate of how useful an action is in a state. Larger values point toward more rewarding routes.</dd>
+              </div>
+              <div class="tutorial-term" data-tutorial-term="alpha">
+                <dt>Learning rate (α, alpha)</dt>
+                <dd>How strongly one new experience changes the old Q-value. Raise the α slider to learn faster from each move.</dd>
+              </div>
+              <div class="tutorial-term" data-tutorial-term="gamma">
+                <dt>Future reward (γ, gamma)</dt>
+                <dd>How much later rewards matter now. Raise the γ slider to value rewards farther along a route.</dd>
+              </div>
+              <div class="tutorial-term" data-tutorial-term="epsilon">
+                <dt>Exploration (ε, epsilon)</dt>
+                <dd>The chance of trying a random action instead of a best-known action. It shrinks as episodes finish.</dd>
+              </div>
+            </dl>
           </details>
         </aside>
       </div>

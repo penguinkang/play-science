@@ -1345,14 +1345,19 @@
     train100Button.addEventListener("click", () => { void trainEpisodes(100); });
     resetButton.addEventListener("click", reset);
 
+    const continuationInteractiveRoles = [
+      "button", "link", "checkbox", "radio", "switch", "combobox", "listbox",
+      "option", "slider", "spinbutton", "textbox", "searchbox", "scrollbar",
+      "menuitem", "menuitemcheckbox", "menuitemradio", "tab", "treeitem",
+      "gridcell", "grid", "menu", "menubar", "radiogroup", "tablist", "tree",
+      "treegrid",
+    ];
     const continuationInteractiveSelector = [
       "a[href]", "area[href]", "button", "input", "select", "textarea", "summary",
       "audio[controls]", "video[controls]", "iframe", "embed", "object",
-      "[role='button']", "[role='link']", "[role='checkbox']", "[role='radio']",
-      "[role='switch']", "[role='slider']", "[role='spinbutton']", "[role='combobox']",
-      "[role='listbox']", "[role='option']", "[role='menuitem']",
-      "[role='menuitemcheckbox']", "[role='menuitemradio']", "[role='tab']",
-      "[role='treeitem']",
+      ...continuationInteractiveRoles.map((role) => `[role~='${role}']`),
+      "[role~='separator'][tabindex]", "[role~='columnheader'][tabindex]",
+      "[role~='rowheader'][tabindex]",
     ].join(", ");
 
     function isContinuationInteractiveTarget(target) {

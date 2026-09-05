@@ -141,9 +141,28 @@ frame.addEventListener("load", async () => {
       <textarea></textarea>
       <button type="button">button</button>
       <div contenteditable="true"><span>editable child</span></div>
-      <span role="button" tabindex="0">ARIA button</span>
-      <span role="link" tabindex="0">ARIA link</span>
     `;
+    const ariaInteractiveRoles = [
+      "button", "link", "checkbox", "radio", "switch", "combobox", "listbox",
+      "option", "slider", "spinbutton", "textbox", "searchbox", "scrollbar",
+      "menuitem", "menuitemcheckbox", "menuitemradio", "tab", "treeitem",
+      "gridcell", "grid", "menu", "menubar", "radiogroup", "tablist", "tree",
+      "treegrid",
+    ];
+    for (const role of ariaInteractiveRoles) {
+      const fixture = doc.createElement("span");
+      fixture.setAttribute("role", role);
+      fixture.setAttribute("tabindex", "0");
+      fixture.setAttribute("aria-label", `ARIA ${role}`);
+      interactiveFixtures.append(fixture);
+    }
+    for (const role of ["separator", "columnheader", "rowheader"]) {
+      const fixture = doc.createElement("span");
+      fixture.setAttribute("role", role);
+      fixture.setAttribute("tabindex", "0");
+      fixture.setAttribute("aria-label", `Focusable ARIA ${role}`);
+      interactiveFixtures.append(fixture);
+    }
     doc.body.append(interactiveFixtures);
     const interactiveTargets = [
       interactiveFixtures.querySelector("a[href]"),
@@ -152,11 +171,14 @@ frame.addEventListener("load", async () => {
       interactiveFixtures.querySelector("textarea"),
       interactiveFixtures.querySelector("button"),
       interactiveFixtures.querySelector("[contenteditable] span"),
-      interactiveFixtures.querySelector("[role='button']"),
-      interactiveFixtures.querySelector("[role='link']"),
+      ...ariaInteractiveRoles.map(role => interactiveFixtures.querySelector(`[role='${role}']`)),
+      interactiveFixtures.querySelector("[role='separator']"),
+      interactiveFixtures.querySelector("[role='columnheader']"),
+      interactiveFixtures.querySelector("[role='rowheader']"),
     ];
     for (const target of interactiveTargets) {
       target.dispatchEvent(new win.KeyboardEvent("keydown", { key: "x", bubbles: true }));
+      await pause(win);
       check(api.visualSnapshot().inspectorPhase === "waiting",
         `character input from ${target.parentElement?.isContentEditable ? "contenteditable" : target.outerHTML} does not continue training`);
     }

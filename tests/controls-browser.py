@@ -35,6 +35,8 @@ HARNESS = r"""<!doctype html>
 const result = document.querySelector("#result");
 window.__trustedTabReady = false;
 window.__trustedTabSent = false;
+window.__trustedSummaryReady = false;
+window.__trustedSummarySent = false;
 const checks = [];
 function check(condition, message) {
   if (!condition) throw new Error(message);
@@ -117,6 +119,48 @@ frame.addEventListener("load", async () => {
     check(waitingStatus.textContent.includes("character key")
       && !waitingStatus.textContent.includes("non-modifier"),
       "waiting copy accurately limits keyboard continuation to character keys");
+
+    const tutorial = doc.querySelector("#q-learning-tutorial");
+    const tutorialSummary = tutorial.querySelector("summary");
+    tutorial.open = false;
+    tutorialSummary.focus();
+    check(doc.activeElement === tutorialSummary,
+      "tutorial disclosure summary can receive keyboard focus while waiting");
+    window.parent.__trustedSummaryReady = true;
+    await waitUntil(() => window.parent.__trustedSummarySent, win, "trusted CDP Space input");
+    check(api.visualSnapshot().inspectorPhase === "waiting",
+      "trusted Space on a focused summary does not continue training");
+    check(tutorial.open,
+      "trusted Space on a focused summary preserves native disclosure behavior");
+
+    const interactiveFixtures = doc.createElement("div");
+    interactiveFixtures.innerHTML = `
+      <a href="#tutorial">link</a>
+      <input>
+      <select><option>choice</option></select>
+      <textarea></textarea>
+      <button type="button">button</button>
+      <div contenteditable="true"><span>editable child</span></div>
+      <span role="button" tabindex="0">ARIA button</span>
+      <span role="link" tabindex="0">ARIA link</span>
+    `;
+    doc.body.append(interactiveFixtures);
+    const interactiveTargets = [
+      interactiveFixtures.querySelector("a[href]"),
+      interactiveFixtures.querySelector("input"),
+      interactiveFixtures.querySelector("select"),
+      interactiveFixtures.querySelector("textarea"),
+      interactiveFixtures.querySelector("button"),
+      interactiveFixtures.querySelector("[contenteditable] span"),
+      interactiveFixtures.querySelector("[role='button']"),
+      interactiveFixtures.querySelector("[role='link']"),
+    ];
+    for (const target of interactiveTargets) {
+      target.dispatchEvent(new win.KeyboardEvent("keydown", { key: "x", bubbles: true }));
+      check(api.visualSnapshot().inspectorPhase === "waiting",
+        `character input from ${target.parentElement?.isContentEditable ? "contenteditable" : target.outerHTML} does not continue training`);
+    }
+    interactiveFixtures.remove();
 
     const nonContentKeys = [
       "Shift", "Control", "Alt", "Meta", "CapsLock", "AltGraph", "Fn", "FnLock",
@@ -438,6 +482,19 @@ try:
             client.call("Input.dispatchKeyEvent", type="rawKeyDown", **tab)
             client.call("Input.dispatchKeyEvent", type="keyUp", **tab)
             client.evaluate("window.__trustedTabSent = true")
+            while time.monotonic() < deadline and not client.evaluate(
+                "window.__trustedSummaryReady === true"
+            ):
+                time.sleep(0.02)
+            if not client.evaluate("window.__trustedSummaryReady === true"):
+                raise RuntimeError("Timed out waiting for the trusted summary checkpoint")
+            space = {
+                "key": " ", "code": "Space", "windowsVirtualKeyCode": 32,
+                "nativeVirtualKeyCode": 32, "text": " ",
+            }
+            client.call("Input.dispatchKeyEvent", type="rawKeyDown", **space)
+            client.call("Input.dispatchKeyEvent", type="keyUp", **space)
+            client.evaluate("window.__trustedSummarySent = true")
             while time.monotonic() < deadline:
                 status = client.evaluate("document.querySelector('#result').dataset.status || ''")
                 if status in ("pass", "fail"):

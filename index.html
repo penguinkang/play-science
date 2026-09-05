@@ -1345,18 +1345,35 @@
     train100Button.addEventListener("click", () => { void trainEpisodes(100); });
     resetButton.addEventListener("click", reset);
 
+    const continuationInteractiveSelector = [
+      "a[href]", "area[href]", "button", "input", "select", "textarea", "summary",
+      "audio[controls]", "video[controls]", "iframe", "embed", "object",
+      "[role='button']", "[role='link']", "[role='checkbox']", "[role='radio']",
+      "[role='switch']", "[role='slider']", "[role='spinbutton']", "[role='combobox']",
+      "[role='listbox']", "[role='option']", "[role='menuitem']",
+      "[role='menuitemcheckbox']", "[role='menuitemradio']", "[role='tab']",
+      "[role='treeitem']",
+    ].join(", ");
+
+    function isContinuationInteractiveTarget(target) {
+      if (!(target instanceof Element)) return false;
+      const editableRoot = target.closest("[contenteditable]");
+      if (editableRoot && editableRoot.isContentEditable) return true;
+      return Boolean(target.closest(continuationInteractiveSelector));
+    }
+
     document.addEventListener("keydown", (event) => {
       if (!activeContinuation || event.isComposing) return;
       if (event.ctrlKey || event.altKey || event.metaKey
         || event.key.length !== 1) return;
-      if (event.target instanceof Element
-        && event.target.closest("input, textarea, select, button, [contenteditable='true']")) return;
+      if (isContinuationInteractiveTarget(event.target)) return;
       resolveContinuation();
     });
 
     document.addEventListener("click", (event) => {
       if (!activeContinuation || !(event.target instanceof Element)) return;
-      if (event.target.closest("button, input, textarea, select, a, label, summary, [contenteditable='true']")) return;
+      if (isContinuationInteractiveTarget(event.target)
+        || event.target.closest("a, label, [contenteditable]")) return;
       resolveContinuation();
     });
 

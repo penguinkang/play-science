@@ -45,14 +45,45 @@ frame.addEventListener("load", async () => {
     const api = win.__playScienceTest;
     doc.querySelector("[data-open-game]").click();
     doc.querySelector("#animation-speed").value = "100";
+    doc.querySelector("#subtitle-toggle").click();
+    check(doc.querySelector("#subtitle").hidden,
+      "learning subtitles can be hidden before an animated run");
 
     api.reset();
     api.setEpsilon(0);
     ["up", "down", "left"].forEach(action => api.setQ([0, 0], action, -2));
     api.setQ([0, 0], "right", 1);
+    const beforeAnimatedControls = api.snapshot();
     const paced = api.runAnimatedStep();
+    check(api.visualSnapshot().inspectorPhase === "1",
+      "animated training enters phase 1 synchronously");
+    check(doc.querySelector("#step-button").disabled
+      && doc.querySelector("#fast-episode-button").disabled
+      && doc.querySelector("#train-100-button").disabled,
+      "every conflicting training control is disabled during animated phases");
+    check(!doc.querySelector("#reset-button").disabled,
+      "Reset remains available during animated phases");
+    doc.querySelector("#fast-episode-button").click();
+    doc.querySelector("#train-100-button").click();
+    await pause(win, 25);
+    check(api.visualSnapshot().inspectorPhase === "1"
+      && api.snapshot().episodes === beforeAnimatedControls.episodes
+      && api.snapshot().steps === beforeAnimatedControls.steps,
+      "disabled training controls cannot cancel or replace an animated phase");
     await waitUntil(() => api.visualSnapshot().inspectorPhase === "waiting", win, "first waiting state");
     const waitingSnapshot = api.snapshot();
+    const waitingStatus = doc.querySelector("#waiting-status");
+    check(waitingStatus && !waitingStatus.hidden
+      && waitingStatus.getAttribute("role") === "status"
+      && waitingStatus.textContent.includes("Continue")
+      && doc.querySelector("#subtitle").hidden,
+      "waiting has an explanatory status banner even when subtitles are off");
+    check(doc.querySelector("#step-button").disabled
+      && doc.querySelector("#fast-episode-button").disabled
+      && doc.querySelector("#train-100-button").disabled
+      && !doc.querySelector("#continue-button").disabled
+      && !doc.querySelector("#reset-button").disabled,
+      "waiting keeps training controls locked while Continue and Reset remain available");
     await pause(win, 250);
     check(api.visualSnapshot().inspectorPhase === "waiting"
       && api.snapshot().steps === waitingSnapshot.steps,

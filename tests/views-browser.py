@@ -161,18 +161,19 @@ frame.addEventListener("load", async () => {
       "reset leaves no abandoned animated movement");
 
     interrupted = await beginMovement();
+    const interruptedSnapshot = api.snapshot();
+    const interruptedPhase = api.visualSnapshot().inspectorPhase;
     doc.querySelector("#fast-episode-button").click();
-    canceled = await settleWithin(interrupted.promise, win);
-    check(canceled.canceled === true, "fast episode cancels and settles active movement");
-    check(!api.visualSnapshot().movement.active,
-      "fast episode leaves no abandoned animated movement");
-
-    interrupted = await beginMovement();
     doc.querySelector("#train-100-button").click();
+    await pause(win, 80);
+    check(api.visualSnapshot().movement.active
+      && api.visualSnapshot().inspectorPhase === interruptedPhase
+      && api.snapshot().episodes === interruptedSnapshot.episodes,
+      "disabled fast and batch controls do not interrupt active movement");
+    api.reset();
     canceled = await settleWithin(interrupted.promise, win);
-    check(canceled.canceled === true, "batch training cancels and settles active movement");
-    check(!api.visualSnapshot().movement.active,
-      "batch training leaves no abandoned animated movement");
+    check(canceled.canceled === true,
+      "reset still settles movement after ignored training-control activation");
 
     interrupted = await beginMovement();
     doc.querySelector("[data-close-game]").click();

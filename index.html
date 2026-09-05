@@ -137,6 +137,15 @@
     .secondary { background: #f8fafc; }
     .danger { background: #fca5a5; }
 
+    #waiting-status {
+      border: 3px solid var(--ink);
+      padding: .8rem 1rem;
+      background: #fef08a;
+      box-shadow: 4px 4px 0 var(--accent);
+      font-weight: 900;
+      line-height: 1.5;
+    }
+
     .stats {
       display: grid;
       grid-template-columns: repeat(auto-fit, minmax(8rem, 1fr));
@@ -287,6 +296,9 @@
               <button id="train-100-button" class="pixel-button secondary" type="button">Train 100</button>
               <button id="reset-button" class="pixel-button danger" type="button">Reset</button>
             </div>
+            <p id="waiting-status" role="status" aria-live="polite" aria-atomic="true" hidden>
+              Training paused after this step. Press Continue, any non-modifier key, or the world to keep training.
+            </p>
 
             <dl class="stats" aria-label="Training statistics">
               <div class="stat"><dt>Episodes</dt><dd>0</dd></div>
@@ -825,6 +837,7 @@
     const subtitle = document.querySelector("#subtitle");
     const stepButton = document.querySelector("#step-button");
     const continueButton = document.querySelector("#continue-button");
+    const waitingStatus = document.querySelector("#waiting-status");
     const fastEpisodeButton = document.querySelector("#fast-episode-button");
     const train100Button = document.querySelector("#train-100-button");
     const resetButton = document.querySelector("#reset-button");
@@ -896,13 +909,14 @@
       stepButton.hidden = false;
       stepButton.disabled = false;
       continueButton.hidden = true;
+      waitingStatus.hidden = true;
     }
 
-    function setControlsRunning(running, disableModeSwitches = running) {
+    function setControlsRunning(running) {
       controlsRunning = running;
       stepButton.disabled = running;
-      fastEpisodeButton.disabled = disableModeSwitches;
-      train100Button.disabled = disableModeSwitches;
+      fastEpisodeButton.disabled = running;
+      train100Button.disabled = running;
       parameterInputs.forEach((input) => { input.disabled = running; });
     }
 
@@ -1023,7 +1037,7 @@
     async function runAnimatedStep(random = Math.random) {
       if (controlsRunning) return null;
       stepBusy = true;
-      setControlsRunning(true, false);
+      setControlsRunning(true);
       continueButton.hidden = true;
       const token = ++stepRunToken;
       pendingAnimatedTransition = {
@@ -1072,6 +1086,7 @@
       stepBusy = false;
       stepButton.hidden = true;
       continueButton.hidden = false;
+      waitingStatus.hidden = false;
       setControlsRunning(true);
       subtitle.textContent = "Training is waiting. Press Continue, any non-modifier key, or the world when you are ready.";
       setInspectorPhase("waiting", record);
@@ -1088,7 +1103,7 @@
     }
 
     function beginFastRun() {
-      if (controlsRunning && !stepBusy) return null;
+      if (controlsRunning) return null;
       cancelAnimatedRun();
       const token = stepRunToken;
       setControlsRunning(true);
@@ -1105,7 +1120,7 @@
     const yieldToBrowser = () => new Promise((resolve) => window.setTimeout(resolve, 0));
 
     async function trainEpisodes(count = 100) {
-      if (controlsRunning && !stepBusy) return Object.freeze({ canceled: false, completed: 0 });
+      if (controlsRunning) return Object.freeze({ canceled: false, completed: 0 });
       cancelAnimatedRun();
       const token = stepRunToken;
       setControlsRunning(true);

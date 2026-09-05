@@ -24,7 +24,7 @@ Press **Step** to follow one Q-learning update in the Formula inspector:
 4. **Update the value:** blend the old value and target using alpha.
 5. **Reflect:** compare the old and new Q-values and save the change.
 
-Learning subtitles narrate each phase. Use **Subtitles on/off** to change only their visibility; it does not alter training. After phase five, training pauses so the result remains available to inspect. Continue with the **Continue** button, any non-modifier key when focus is not in a control, or a click/tap on the grid world or other non-interactive page area.
+Learning subtitles narrate each phase. Use **Subtitles on/off** to change only their visibility; it does not alter training. After phase five, training pauses so the result remains available to inspect. Continue with the **Continue** button, a character key when focus is not in a control, or a click/tap on the grid world or other non-interactive page area. Navigation, function, and modifier keys do not continue training.
 
 ## Controls and views
 

@@ -325,7 +325,7 @@
                 <button class="pixel-button secondary" type="button" data-view-mode="heatmap" aria-pressed="false">Heatmap</button>
               </div>
             </div>
-            <canvas id="world-canvas" width="600" height="600" role="img" tabindex="0" aria-label="Six by six Q-learning world. When training pauses, focus here and press a character key to continue." aria-describedby="world-summary"></canvas>
+            <canvas id="world-canvas" width="600" height="600" role="img" tabindex="0" aria-label="Six by six Q-learning world. When training pauses, select Continue, press a character key while focus is not in a control, or click the world." aria-describedby="world-summary"></canvas>
             <p id="world-summary" class="sr-only"></p>
           </section>
 
@@ -339,7 +339,7 @@
               <button id="reset-button" class="pixel-button danger" type="button">Reset</button>
             </div>
             <p id="waiting-status" role="status" aria-live="polite" aria-atomic="true" hidden>
-              Training paused after this step. Press Continue, any non-modifier key, or the world to keep training.
+              Training paused after this step. Select Continue, press a character key while focus is not in a control, or click the world to keep training. Navigation, function, and modifier keys do not continue.
             </p>
 
             <dl class="stats" aria-label="Training statistics">
@@ -673,6 +673,34 @@
 
     const describeCell = ([row, column]) => `row ${row}, column ${column}`;
 
+    function joinWords(words) {
+      if (words.length < 2) return words[0] || "";
+      return `${words.slice(0, -1).join(", ")} and ${words.at(-1)}`;
+    }
+
+    function learnedStateSummaries() {
+      const learned = [];
+      for (let row = 0; row < GRID_ROWS; row += 1) {
+        for (let column = 0; column < GRID_COLUMNS; column += 1) {
+          const cell = [row, column];
+          if (sameState(cell, ENTITIES.goal) || containsState(ENTITIES.hazards, cell)) continue;
+          const values = ACTIONS.map((action) => getQ(cell, action));
+          if (!values.some((value) => value !== 0)) continue;
+          const maximum = Math.max(...values);
+          learned.push({
+            cell,
+            maximum,
+            bestActions: ACTIONS.filter((_, index) => values[index] === maximum),
+            significance: Math.max(...values.map((value) => Math.abs(value))),
+          });
+        }
+      }
+      return learned.sort((first, second) => second.significance - first.significance
+        || first.cell[0] - second.cell[0] || first.cell[1] - second.cell[1]);
+    }
+
+    const describeHeatmapCell = ({ cell, value }) => `${describeCell(cell)}, ${formatValue(value)}`;
+
     function updateWorldSummary() {
       const coins = remainingCoins.length
         ? remainingCoins.map(describeCell).join("; ")
@@ -680,20 +708,42 @@
       const hazards = ENTITIES.hazards.map(describeCell).join("; ");
       let modeDescription;
       if (viewMode === "q-arrows") {
-        const bestActions = [];
-        for (let row = 0; row < GRID_ROWS; row += 1) {
-          for (let column = 0; column < GRID_COLUMNS; column += 1) {
-            const cell = [row, column];
-            if (sameState(cell, ENTITIES.goal) || containsState(ENTITIES.hazards, cell)) continue;
-            const values = ACTIONS.map((action) => getQ(cell, action));
-            const maximum = Math.max(...values);
-            bestActions.push(`${describeCell(cell)}: ${ACTIONS[values.indexOf(maximum)]}, ${formatValue(maximum)}`);
-          }
+        const learned = learnedStateSummaries();
+        if (!learned.length) {
+          modeDescription = "Q-Arrows view. No learned nonzero Q-values yet.";
+        } else {
+          const shown = learned.slice(0, 8).map(({ cell, maximum, bestActions }) => {
+            const actionLabel = bestActions.length === 1 ? "best action" : "best actions";
+            return `${describeCell(cell)}: ${actionLabel} ${joinWords(bestActions)}, value ${formatValue(maximum)}`;
+          });
+          const countLabel = `${learned.length} learned state${learned.length === 1 ? "" : "s"}`;
+          const shownLabel = learned.length > shown.length
+            ? `Showing ${shown.length} most significant: `
+            : "";
+          modeDescription = `Q-Arrows view. ${countLabel}. ${shownLabel}${shown.join("; ")}.`;
         }
-        modeDescription = `Q-Arrows view. Best action and value by cell: ${bestActions.join("; ")}.`;
       } else if (viewMode === "heatmap") {
         const values = maxQValues();
-        modeDescription = `Heatmap view. State maximum Q range: ${formatValue(Math.min(...values))} to ${formatValue(Math.max(...values))}. Current cell maximum Q: ${formatValue(Math.max(...qTable[stateIndex(state)]))}.`;
+        const meaningful = values
+          .map((value, index) => ({
+            cell: [Math.floor(index / GRID_COLUMNS), index % GRID_COLUMNS],
+            value,
+          }))
+          .filter(({ value }) => value !== 0);
+        const hottest = [...meaningful]
+          .sort((first, second) => second.value - first.value
+            || first.cell[0] - second.cell[0] || first.cell[1] - second.cell[1])
+          .slice(0, 3)
+          .map(describeHeatmapCell);
+        const coldest = [...meaningful]
+          .sort((first, second) => first.value - second.value
+            || first.cell[0] - second.cell[0] || first.cell[1] - second.cell[1])
+          .slice(0, 3)
+          .map(describeHeatmapCell);
+        const spatialDescription = meaningful.length
+          ? ` Hottest learned cells: ${hottest.join("; ")}. Coldest learned cells: ${coldest.join("; ")}.`
+          : " No learned nonzero heatmap cells yet.";
+        modeDescription = `Heatmap view. State maximum Q range: ${formatValue(Math.min(...values))} to ${formatValue(Math.max(...values))}. Current cell maximum Q: ${formatValue(Math.max(...qTable[stateIndex(state)]))}.${spatialDescription}`;
       } else if (currentTransition) {
         modeDescription = `World view. Current transition: ${describeCell(currentTransition.state)} moving ${currentTransition.action} to ${describeCell(currentTransition.nextState)}, reward ${currentTransition.reward}.`;
       } else {
@@ -962,12 +1012,6 @@
     const parameterInputs = [...document.querySelectorAll("#learning-rate, #discount-rate, #animation-speed")];
     const phaseCards = [...inspector.querySelectorAll(".formula-card")];
     const initialFormulaMarkup = phaseCards.map((card) => card.querySelector(".formula").innerHTML);
-    const nonContentContinuationKeys = new Set([
-      "Shift", "Control", "Alt", "Meta", "CapsLock", "AltGraph", "Fn", "FnLock",
-      "NumLock", "ScrollLock", "Symbol", "SymbolLock", "Hyper", "Super", "OS",
-      "Tab", "Escape", "ArrowUp", "ArrowRight", "ArrowDown", "ArrowLeft",
-      "Home", "End", "PageUp", "PageDown", "Insert", "ContextMenu", "PrintScreen",
-    ]);
     function formatValue(value) {
       const rounded = Math.abs(value) < 0.5 * 10 ** -VALUE_PRECISION ? 0 : value;
       return rounded.toFixed(VALUE_PRECISION);
@@ -1215,7 +1259,7 @@
       waitingStatus.hidden = false;
       continueButton.focus();
       setControlsRunning(true);
-      subtitle.textContent = "Training is waiting. Press Continue, any non-modifier key, or the world when you are ready.";
+      subtitle.textContent = "Training is waiting. Select Continue, press a character key while focus is not in a control, or click the world when you are ready. Navigation, function, and modifier keys do not continue.";
       setInspectorPhase("waiting", record);
       void completeContinuation(token, completed, outcome.terminal);
       return Object.freeze({ record, summary, canceled: false });
@@ -1304,7 +1348,7 @@
     document.addEventListener("keydown", (event) => {
       if (!activeContinuation || event.isComposing) return;
       if (event.ctrlKey || event.altKey || event.metaKey
-        || nonContentContinuationKeys.has(event.key) || /^F\d{1,2}$/.test(event.key)) return;
+        || event.key.length !== 1) return;
       if (event.target instanceof Element
         && event.target.closest("input, textarea, select, button, [contenteditable='true']")) return;
       resolveContinuation();

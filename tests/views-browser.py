@@ -82,7 +82,6 @@ frame.addEventListener("load", async () => {
       && chartSummary.textContent.includes("No episode returns yet"),
       "return chart exposes a no-data text alternative");
     const initialWorldRedraws = visual.redraws.world;
-    api.setQ([0, 0], "right", 5);
     const qButton = doc.querySelector('[data-view-mode="q-arrows"]');
     qButton.click();
     await waitFrames(win);
@@ -91,8 +90,34 @@ frame.addEventListener("load", async () => {
       "Q-Arrows changes active mode and redraws");
     check(qButton.getAttribute("aria-pressed") === "true", "Q-Arrows exposes its active state");
     check(worldSummary.textContent.includes("Q-Arrows view")
-      && worldSummary.textContent.includes("row 0, column 0: right, 5.000000"),
-      "Q-Arrows summary reports each cell's best action and value");
+      && worldSummary.textContent.includes("No learned nonzero Q-values yet")
+      && !worldSummary.textContent.includes("best action"),
+      "an all-zero Q-table does not announce arbitrary winning actions");
+
+    api.setQ([0, 0], "right", 5);
+    api.setQ([0, 0], "down", 5);
+    [
+      [[0, 1], 9], [[0, 2], 8], [[0, 3], 7], [[0, 4], 6], [[0, 5], 5.5],
+      [[1, 0], 4], [[1, 1], 3], [[1, 2], 2], [[1, 3], 1],
+    ].forEach(([cell, value]) => api.setQ(cell, "right", value));
+    api.setQ([0, 1], "left", -10);
+    api.setQ([0, 3], "right", 8);
+    qButton.click();
+    await waitFrames(win);
+    check(worldSummary.textContent.includes("10 learned states")
+      && worldSummary.textContent.includes("Showing 8 most significant")
+      && worldSummary.textContent.includes("row 0, column 0: best actions right and down, value 5.000000")
+      && !worldSummary.textContent.includes("row 1, column 2")
+      && !worldSummary.textContent.includes("row 1, column 3"),
+      "Q-Arrows reports ties and bounds its summary to significant learned states");
+    const significantCoordinates = [
+      "row 0, column 1", "row 0, column 2", "row 0, column 3", "row 0, column 4",
+      "row 0, column 5", "row 0, column 0", "row 1, column 0", "row 1, column 1",
+    ];
+    check(significantCoordinates.every((coordinate, index) => index === 0
+      || worldSummary.textContent.indexOf(significantCoordinates[index - 1])
+        < worldSummary.textContent.indexOf(coordinate)),
+      "Q-Arrows orders signed magnitudes and coordinate ties deterministically");
     const qSummary = worldSummary.textContent;
     const qRedraws = visual.redraws.world;
     doc.querySelector('[data-view-mode="heatmap"]').click();
@@ -102,9 +127,22 @@ frame.addEventListener("load", async () => {
       "Heatmap changes active mode and redraws");
     check(worldSummary.textContent !== qSummary
       && worldSummary.textContent.includes("Heatmap view")
-      && worldSummary.textContent.includes("maximum Q range: 0.000000 to 5.000000")
-      && worldSummary.textContent.includes("Current cell maximum Q: 5.000000"),
-      "Heatmap summary reports the max-Q range and current-cell value");
+      && worldSummary.textContent.includes("maximum Q range: 0.000000 to 9.000000")
+      && worldSummary.textContent.includes("Current cell maximum Q: 5.000000")
+      && worldSummary.textContent.includes("Hottest learned cells: row 0, column 1, 9.000000")
+      && worldSummary.textContent.includes("Coldest learned cells: row 1, column 3, 1.000000"),
+      "Heatmap summary reports its range, current value, and spatial extremes");
+    const firstHeatmapSummary = worldSummary.textContent;
+    api.reset();
+    api.setQ([0, 0], "right", 5);
+    api.setQ([5, 4], "left", 9);
+    api.setQ([5, 3], "up", 1);
+    doc.querySelector('[data-view-mode="heatmap"]').click();
+    await waitFrames(win);
+    check(worldSummary.textContent !== firstHeatmapSummary
+      && worldSummary.textContent.includes("Hottest learned cells: row 5, column 4, 9.000000")
+      && worldSummary.textContent.includes("Coldest learned cells: row 5, column 3, 1.000000"),
+      "same-range heatmaps with different spatial distributions have different alternatives");
     const heatmapRedraws = visual.redraws.world;
     const worldButton = doc.querySelector('[data-view-mode="world"]');
     worldButton.click();

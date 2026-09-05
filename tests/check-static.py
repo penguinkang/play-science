@@ -44,11 +44,13 @@ def require(condition: bool, message: str) -> None:
         raise RuntimeError(message)
 
 
-index_path = Path(__file__).resolve().parents[1] / "index.html"
+root = Path(__file__).resolve().parents[1]
+index_path = root / "index.html"
 require(index_path.exists(), f"Missing application shell: {index_path}")
 
 parser = IdCollector()
-parser.feed(index_path.read_text(encoding="utf-8"))
+index_source = index_path.read_text(encoding="utf-8")
+parser.feed(index_source)
 
 for required_id in REQUIRED_IDS:
     count = parser.ids.count(required_id)
@@ -58,5 +60,9 @@ require(
     parser.attributes_by_id.get("game-title", {}).get("tabindex") == "-1",
     "Expected #game-title to be programmatically focusable with tabindex=-1",
 )
+readme_source = (root / "README.md").read_text(encoding="utf-8")
+for name, source in (("UI", index_source), ("README", readme_source)):
+    require("any non-modifier key" not in source.lower(), f"{name} has inaccurate continuation copy")
+    require("character key" in source.lower(), f"{name} names character-key continuation")
 
 print(f"PASS: found {len(REQUIRED_IDS)} required landmarks exactly once")

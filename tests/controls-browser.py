@@ -4,12 +4,21 @@
 from __future__ import annotations
 
 import html
+import base64
 import http.server
+import json
+import os
 import shutil
+import socket
+import struct
 import subprocess
 import tempfile
 import threading
+import time
+import urllib.request
+from urllib.parse import urlparse
 from pathlib import Path
+from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
 CHROME_CANDIDATES = (
@@ -24,6 +33,8 @@ HARNESS = r"""<!doctype html>
 <pre id="result">WAITING</pre>
 <script>
 const result = document.querySelector("#result");
+window.__trustedTabReady = false;
+window.__trustedTabSent = false;
 const checks = [];
 function check(condition, message) {
   if (!condition) throw new Error(message);
@@ -97,23 +108,22 @@ frame.addEventListener("load", async () => {
     check(doc.activeElement === doc.querySelector("#continue-button"),
       "waiting moves focus from the hidden Step button to Continue");
 
-    const tabEvent = new win.KeyboardEvent("keydown", {
-      key: "Tab", bubbles: true, cancelable: true,
-    });
-    const tabAllowed = doc.querySelector("#continue-button").dispatchEvent(tabEvent);
-    await pause(win, 10);
-    check(tabAllowed && !tabEvent.defaultPrevented
-      && api.visualSnapshot().inspectorPhase === "waiting",
-      "Tab remains available for focus navigation and does not continue training");
-    doc.querySelector("#reset-button").focus();
+    window.parent.__trustedTabReady = true;
+    await waitUntil(() => window.parent.__trustedTabSent, win, "trusted CDP Tab input");
+    check(api.visualSnapshot().inspectorPhase === "waiting",
+      "trusted Tab input does not continue training");
     check(doc.activeElement === doc.querySelector("#reset-button"),
-      "focus can navigate from Continue to the next enabled visible control");
+      "trusted Tab input moves focus from Continue to Reset");
+    check(waitingStatus.textContent.includes("character key")
+      && !waitingStatus.textContent.includes("non-modifier"),
+      "waiting copy accurately limits keyboard continuation to character keys");
 
     const nonContentKeys = [
       "Shift", "Control", "Alt", "Meta", "CapsLock", "AltGraph", "Fn", "FnLock",
       "NumLock", "ScrollLock", "Symbol", "SymbolLock", "Hyper", "Super", "OS",
       "Tab", "Escape", "ArrowUp", "ArrowRight", "ArrowDown", "ArrowLeft",
       "Home", "End", "PageUp", "PageDown", "Insert", "ContextMenu", "PrintScreen",
+      "Enter", "Backspace", "Delete", "F1", "F12",
     ];
     for (const key of nonContentKeys) {
       doc.dispatchEvent(new win.KeyboardEvent("keydown", { key, bubbles: true }));
@@ -136,7 +146,7 @@ frame.addEventListener("load", async () => {
     const pacedResult = await paced;
     await waitUntil(() => api.visualSnapshot().inspectorPhase === "idle", win, "keyboard continuation");
     check(!pacedResult.canceled,
-      "a non-modifier document key resolves the paced wait");
+      "a character document key resolves the paced wait");
     check(doc.activeElement === doc.querySelector("#step-button"),
       "character continuation returns focus to the visible Step control");
 
@@ -282,12 +292,122 @@ def find_chrome() -> str:
     raise RuntimeError("No Chrome/Chromium browser found")
 
 
+def reserve_port() -> int:
+    with socket.socket() as listener:
+        listener.bind(("127.0.0.1", 0))
+        return listener.getsockname()[1]
+
+
+class DevToolsClient:
+    """Small dependency-free WebSocket client for trusted CDP input."""
+
+    def __init__(self, websocket_url: str) -> None:
+        parsed = urlparse(websocket_url)
+        self.connection = socket.create_connection((parsed.hostname, parsed.port), timeout=10)
+        key = base64.b64encode(os.urandom(16)).decode()
+        target = parsed.path + (f"?{parsed.query}" if parsed.query else "")
+        request = (
+            f"GET {target} HTTP/1.1\r\n"
+            f"Host: {parsed.hostname}:{parsed.port}\r\n"
+            "Upgrade: websocket\r\nConnection: Upgrade\r\n"
+            f"Sec-WebSocket-Key: {key}\r\nSec-WebSocket-Version: 13\r\n\r\n"
+        )
+        self.connection.sendall(request.encode())
+        response = b""
+        while b"\r\n\r\n" not in response:
+            chunk = self.connection.recv(4096)
+            if not chunk:
+                raise RuntimeError("CDP WebSocket closed during handshake")
+            response += chunk
+        if not response.startswith(b"HTTP/1.1 101"):
+            raise RuntimeError(f"CDP WebSocket handshake failed: {response[:200]!r}")
+        self.next_id = 1
+
+    def close(self) -> None:
+        self.connection.close()
+
+    def _read_exactly(self, length: int) -> bytes:
+        chunks = bytearray()
+        while len(chunks) < length:
+            chunk = self.connection.recv(length - len(chunks))
+            if not chunk:
+                raise RuntimeError("CDP WebSocket closed unexpectedly")
+            chunks.extend(chunk)
+        return bytes(chunks)
+
+    def _receive(self) -> dict[str, Any]:
+        first, second = self._read_exactly(2)
+        opcode = first & 0x0F
+        length = second & 0x7F
+        if length == 126:
+            length = struct.unpack("!H", self._read_exactly(2))[0]
+        elif length == 127:
+            length = struct.unpack("!Q", self._read_exactly(8))[0]
+        payload = self._read_exactly(length)
+        if opcode == 9:
+            self._send(payload, opcode=10)
+            return self._receive()
+        if opcode != 1:
+            raise RuntimeError(f"Unexpected CDP WebSocket opcode: {opcode}")
+        return json.loads(payload.decode())
+
+    def _send(self, payload: bytes, opcode: int = 1) -> None:
+        mask = os.urandom(4)
+        length = len(payload)
+        header = bytearray([0x80 | opcode])
+        if length < 126:
+            header.append(0x80 | length)
+        elif length < 65536:
+            header.append(0x80 | 126)
+            header.extend(struct.pack("!H", length))
+        else:
+            header.append(0x80 | 127)
+            header.extend(struct.pack("!Q", length))
+        masked = bytes(value ^ mask[index % 4] for index, value in enumerate(payload))
+        self.connection.sendall(bytes(header) + mask + masked)
+
+    def call(self, method: str, **params: object) -> dict[str, Any]:
+        message_id = self.next_id
+        self.next_id += 1
+        self._send(json.dumps({"id": message_id, "method": method, "params": params}).encode())
+        while True:
+            response = self._receive()
+            if response.get("id") != message_id:
+                continue
+            if "error" in response:
+                raise RuntimeError(f"CDP {method} failed: {response['error']}")
+            return response["result"]
+
+    def evaluate(self, expression: str) -> object:
+        result = self.call("Runtime.evaluate", expression=expression, returnByValue=True)
+        return result["result"].get("value")
+
+
+def connect_to_test_page(port: int, timeout: float = 12) -> DevToolsClient:
+    deadline = time.monotonic() + timeout
+    last_error: Exception | None = None
+    while time.monotonic() < deadline:
+        try:
+            with urllib.request.urlopen(f"http://127.0.0.1:{port}/json/list", timeout=1) as response:
+                targets = json.load(response)
+            target = next(item for item in targets if "__controls_test__" in item.get("url", ""))
+            return DevToolsClient(target["webSocketDebuggerUrl"])
+        except (OSError, RuntimeError, StopIteration) as error:
+            last_error = error
+            time.sleep(0.05)
+    raise RuntimeError(f"Could not connect to controls page over CDP: {last_error}")
+
+
 server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), TestHandler)
 thread = threading.Thread(target=server.serve_forever, daemon=True)
 thread.start()
 
+output = ""
+browser_errors = ""
+browser_exit_code = -1
 try:
     with tempfile.TemporaryDirectory(prefix="play-science-controls-") as profile:
+        debugging_port = reserve_port()
         command = [
             find_chrome(),
             "--headless=new",
@@ -296,20 +416,43 @@ try:
             "--disable-component-update",
             "--no-first-run",
             "--no-default-browser-check",
+            "--disable-background-timer-throttling",
             "--force-prefers-reduced-motion=reduce",
             "--window-size=900,1000",
             f"--user-data-dir={profile}",
-            "--virtual-time-budget=35000",
-            "--dump-dom",
+            f"--remote-debugging-port={debugging_port}",
             f"http://127.0.0.1:{server.server_port}/__controls_test__",
         ]
         process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         try:
-            output, browser_errors = process.communicate(timeout=42)
-        except subprocess.TimeoutExpired:
-            process.kill()
-            output, browser_errors = process.communicate()
-        browser_exit_code = process.returncode
+            client = connect_to_test_page(debugging_port)
+            deadline = time.monotonic() + 42
+            while time.monotonic() < deadline and not client.evaluate("window.__trustedTabReady === true"):
+                time.sleep(0.02)
+            if not client.evaluate("window.__trustedTabReady === true"):
+                raise RuntimeError("Timed out waiting for the trusted Tab checkpoint")
+            tab = {
+                "key": "Tab", "code": "Tab", "windowsVirtualKeyCode": 9,
+                "nativeVirtualKeyCode": 9,
+            }
+            client.call("Input.dispatchKeyEvent", type="rawKeyDown", **tab)
+            client.call("Input.dispatchKeyEvent", type="keyUp", **tab)
+            client.evaluate("window.__trustedTabSent = true")
+            while time.monotonic() < deadline:
+                status = client.evaluate("document.querySelector('#result').dataset.status || ''")
+                if status in ("pass", "fail"):
+                    break
+                time.sleep(0.02)
+            output = str(client.evaluate("document.querySelector('#result').outerHTML"))
+            client.close()
+        finally:
+            process.terminate()
+            try:
+                _, browser_errors = process.communicate(timeout=5)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                _, browser_errors = process.communicate()
+            browser_exit_code = process.returncode
 finally:
     server.shutdown()
     server.server_close()

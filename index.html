@@ -376,9 +376,11 @@
     let currentTransition = null;
     let activeMovementAnimation = null;
     let activePhaseDelay = null;
+    let activeContinuation = null;
     let pendingAnimatedTransition = null;
     let stepRunToken = 0;
     let stepBusy = false;
+    let controlsRunning = false;
     let movement = { active: false, progress: 1, row: START_STATE[0], column: START_STATE[1] };
     const redraws = { world: 0, chart: 0 };
     let chartPoints = 0;
@@ -823,6 +825,10 @@
     const subtitle = document.querySelector("#subtitle");
     const stepButton = document.querySelector("#step-button");
     const continueButton = document.querySelector("#continue-button");
+    const fastEpisodeButton = document.querySelector("#fast-episode-button");
+    const train100Button = document.querySelector("#train-100-button");
+    const resetButton = document.querySelector("#reset-button");
+    const parameterInputs = [...document.querySelectorAll("#learning-rate, #discount-rate, #animation-speed")];
     const phaseCards = [...inspector.querySelectorAll(".formula-card")];
     const initialFormulaMarkup = phaseCards.map((card) => card.querySelector(".formula").innerHTML);
     function formatValue(value) {
@@ -892,6 +898,14 @@
       continueButton.hidden = true;
     }
 
+    function setControlsRunning(running, disableModeSwitches = running) {
+      controlsRunning = running;
+      stepButton.disabled = running;
+      fastEpisodeButton.disabled = disableModeSwitches;
+      train100Button.disabled = disableModeSwitches;
+      parameterInputs.forEach((input) => { input.disabled = running; });
+    }
+
     function cancelPhaseDelay() {
       if (!activePhaseDelay) return;
       clearTimeout(activePhaseDelay.timer);
@@ -903,6 +917,12 @@
     function cancelAnimatedRun() {
       stepRunToken += 1;
       stepBusy = false;
+      setControlsRunning(false);
+      if (activeContinuation) {
+        const continuation = activeContinuation;
+        activeContinuation = null;
+        continuation.resolve(false);
+      }
       if (pendingAnimatedTransition) {
         state = [...pendingAnimatedTransition.state];
         remainingCoins = pendingAnimatedTransition.remainingCoins.map((coin) => [...coin]);
@@ -911,6 +931,31 @@
       }
       cancelPhaseDelay();
       cancelMovement();
+    }
+
+    function waitForContinuation(token) {
+      return new Promise((resolve) => {
+        activeContinuation = { token, resolve };
+      });
+    }
+
+    function resolveContinuation() {
+      if (!activeContinuation) return false;
+      const continuation = activeContinuation;
+      activeContinuation = null;
+      continuation.resolve(true);
+      return true;
+    }
+
+    async function completeContinuation(token, completed, terminal) {
+      const shouldContinue = await waitForContinuation(token);
+      if (!shouldContinue || token !== stepRunToken) return;
+      if (completed) finishEpisode(terminal);
+      currentTransition = null;
+      movement = { active: false, progress: 1, row: state[0], column: state[1] };
+      resetInspector();
+      setControlsRunning(false);
+      renderAll();
     }
 
     function waitForPhase(duration) {
@@ -976,9 +1021,9 @@
     }
 
     async function runAnimatedStep(random = Math.random) {
-      if (stepBusy) return null;
+      if (controlsRunning) return null;
       stepBusy = true;
-      stepButton.disabled = true;
+      setControlsRunning(true, false);
       continueButton.hidden = true;
       const token = ++stepRunToken;
       pendingAnimatedTransition = {
@@ -1014,11 +1059,11 @@
       pendingAnimatedTransition = null;
       steps += 1;
       episodeReturn += outcome.reward;
-      const summary = outcome.terminal || steps >= MAX_EPISODE_STEPS
-        ? finishEpisode(outcome.terminal)
+      const completed = outcome.terminal || steps >= MAX_EPISODE_STEPS;
+      const summary = completed
+        ? Object.freeze({ return: episodeReturn, steps, terminal: outcome.terminal })
         : null;
       updateStats();
-      if (summary) renderChart();
       setInspectorPhase(5, record);
       renderWorld();
       await waitForPhase(speed);
@@ -1027,12 +1072,59 @@
       stepBusy = false;
       stepButton.hidden = true;
       continueButton.hidden = false;
-      subtitle.textContent = "The update is complete. Continue when you are ready for another turn.";
+      setControlsRunning(true);
+      subtitle.textContent = "Training is waiting. Press Continue, any non-modifier key, or the world when you are ready.";
       setInspectorPhase("waiting", record);
+      void completeContinuation(token, completed, outcome.terminal);
       return Object.freeze({ record, summary, canceled: false });
     }
 
-    const performAnimatedStep = runAnimatedStep;
+    async function performAnimatedStep(random = Math.random) {
+      const result = await runAnimatedStep(random);
+      if (result && !result.canceled && inspector.dataset.inspectorPhase === "waiting") {
+        resolveContinuation();
+      }
+      return result;
+    }
+
+    function beginFastRun() {
+      if (controlsRunning && !stepBusy) return null;
+      cancelAnimatedRun();
+      const token = stepRunToken;
+      setControlsRunning(true);
+      const summary = runEpisode();
+      if (token !== stepRunToken) return null;
+      currentTransition = null;
+      movement = { active: false, progress: 1, row: state[0], column: state[1] };
+      resetInspector();
+      setControlsRunning(false);
+      renderAll();
+      return summary;
+    }
+
+    const yieldToBrowser = () => new Promise((resolve) => window.setTimeout(resolve, 0));
+
+    async function trainEpisodes(count = 100) {
+      if (controlsRunning && !stepBusy) return Object.freeze({ canceled: false, completed: 0 });
+      cancelAnimatedRun();
+      const token = stepRunToken;
+      setControlsRunning(true);
+      let completed = 0;
+      while (completed < count && token === stepRunToken) {
+        runEpisode();
+        completed += 1;
+        if (completed % 20 === 0) await yieldToBrowser();
+      }
+      const canceled = token !== stepRunToken;
+      if (!canceled) {
+        currentTransition = null;
+        movement = { active: false, progress: 1, row: state[0], column: state[1] };
+        resetInspector();
+        setControlsRunning(false);
+        renderAll();
+      }
+      return Object.freeze({ canceled, completed });
+    }
 
     function visualSnapshot() {
       return {
@@ -1044,6 +1136,7 @@
         },
         movement: { ...movement },
         stepBusy,
+        controlsRunning,
         inspectorPhase: inspector.dataset.inspectorPhase,
         chartPoints,
       };
@@ -1061,23 +1154,24 @@
     });
 
     stepButton.addEventListener("click", () => { void runAnimatedStep(); });
-    document.querySelector("#fast-episode-button").addEventListener("click", () => {
-      cancelAnimatedRun();
-      runEpisode();
-      currentTransition = null;
-      movement = { active: false, progress: 1, row: state[0], column: state[1] };
-      resetInspector();
-      renderAll();
+    continueButton.addEventListener("click", resolveContinuation);
+    fastEpisodeButton.addEventListener("click", beginFastRun);
+    train100Button.addEventListener("click", () => { void trainEpisodes(100); });
+    resetButton.addEventListener("click", reset);
+
+    document.addEventListener("keydown", (event) => {
+      if (!activeContinuation || event.isComposing) return;
+      if (["Shift", "Control", "Alt", "Meta", "CapsLock"].includes(event.key)) return;
+      if (event.target instanceof Element
+        && event.target.closest("input, textarea, select, button, [contenteditable='true']")) return;
+      resolveContinuation();
     });
-    document.querySelector("#train-100-button").addEventListener("click", () => {
-      cancelAnimatedRun();
-      for (let count = 0; count < 100; count += 1) runEpisode();
-      currentTransition = null;
-      movement = { active: false, progress: 1, row: state[0], column: state[1] };
-      resetInspector();
-      renderAll();
+
+    document.addEventListener("click", (event) => {
+      if (!activeContinuation || !(event.target instanceof Element)) return;
+      if (event.target.closest("button, input, textarea, select, a, label, summary, [contenteditable='true']")) return;
+      resolveContinuation();
     });
-    document.querySelector("#reset-button").addEventListener("click", reset);
 
     document.querySelectorAll("[data-view-mode]").forEach((button) => {
       button.addEventListener("click", () => {
@@ -1106,7 +1200,19 @@
       getQ,
       setQ,
       setEpsilon(value) { epsilon = value; },
+      setState(value) {
+        if (!Array.isArray(value) || value.length !== 2
+          || !Number.isInteger(value[0]) || !Number.isInteger(value[1])
+          || value[0] < 0 || value[0] >= GRID_ROWS || value[1] < 0 || value[1] >= GRID_COLUMNS) {
+          throw new RangeError("State must be a grid coordinate");
+        }
+        state = [...value];
+        movement = { active: false, progress: 1, row: state[0], column: state[1] };
+        renderWorld();
+      },
       runEpisode,
+      beginFastRun,
+      trainEpisodes,
       runAnimatedStep,
       performAnimatedStep,
       returnChartLayout,

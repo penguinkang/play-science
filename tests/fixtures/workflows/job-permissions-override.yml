@@ -1,4 +1,4 @@
-name: Deploy site to GitHub Pages
+name: Invalid job permission override
 
 on:
   push:
@@ -17,6 +17,8 @@ concurrency:
 
 jobs:
   deploy:
+    permissions:
+      contents: read
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
@@ -30,7 +32,6 @@ jobs:
         uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
         with:
           path: "."
-          # This action always excludes .git and .github from the artifact.
           include-hidden-files: false
       - name: Deploy to GitHub Pages
         id: deployment

@@ -3,9 +3,10 @@
 
 from __future__ import annotations
 
-import re
 from html.parser import HTMLParser
 from pathlib import Path
+
+from pages_workflow import validate_pages_workflow
 
 
 REQUIRED_IDS = (
@@ -73,63 +74,7 @@ require(
 
 workflow_path = root / ".github" / "workflows" / "deploy-pages.yml"
 require(workflow_path.exists(), f"Missing GitHub Pages workflow: {workflow_path}")
-workflow_source = workflow_path.read_text(encoding="utf-8")
-
-for action in (
-    "actions/checkout",
-    "actions/configure-pages",
-    "actions/upload-pages-artifact",
-    "actions/deploy-pages",
-):
-    require(
-        re.search(rf"uses:\s*{re.escape(action)}@v\d+", workflow_source) is not None,
-        f"Pages workflow must use an explicit major version of {action}",
-    )
-
-for permission in ("pages", "id-token"):
-    require(
-        re.search(rf"^\s*{permission}:\s*write\s*$", workflow_source, re.MULTILINE)
-        is not None,
-        f"Pages workflow must grant {permission}: write",
-    )
-
-require(
-    re.search(
-        r"^on:\s*$.*?^\s+push:\s*$.*?^\s+branches:\s*(?:\[\s*main\s*\]|\n\s+-\s*main\s*)$",
-        workflow_source,
-        re.MULTILINE | re.DOTALL,
-    )
-    is not None,
-    "Pages workflow must run on pushes to main",
-)
-require(
-    re.search(r"^\s*environment:\s*$", workflow_source, re.MULTILINE) is not None
-    and re.search(r"^\s*name:\s*github-pages\s*$", workflow_source, re.MULTILINE)
-    is not None,
-    "Pages deployment must use the github-pages environment",
-)
-require(
-    re.search(r"^concurrency:\s*$", workflow_source, re.MULTILINE) is not None
-    and re.search(r"^\s+group:\s*pages\s*$", workflow_source, re.MULTILINE)
-    is not None
-    and re.search(
-        r"^\s+cancel-in-progress:\s*false\s*$", workflow_source, re.MULTILINE
-    )
-    is not None,
-    "Pages workflow must define explicit pages concurrency",
-)
-require(
-    re.search(r"^\s+path:\s*['\"]?\.['\"]?\s*$", workflow_source, re.MULTILINE)
-    is not None,
-    "Pages artifact must upload the repository root",
-)
-require(
-    re.search(
-        r"^\s+include-hidden-files:\s*false\s*$", workflow_source, re.MULTILINE
-    )
-    is not None,
-    "Pages artifact must exclude hidden metadata",
-)
+validate_pages_workflow(workflow_path)
 
 print(
     f"PASS: found {len(REQUIRED_IDS)} required landmarks exactly once "

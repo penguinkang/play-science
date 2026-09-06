@@ -81,6 +81,7 @@ Run the static check and every browser suite from the repository root:
 
 ```bash
 python3 tests/check-static.py
+python3 tests/test_pages_workflow.py
 python3 tests/engine-browser.py
 python3 tests/step-visualization-browser.py
 python3 tests/views-browser.py

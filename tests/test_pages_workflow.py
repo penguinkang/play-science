@@ -48,6 +48,10 @@ class PagesWorkflowTests(unittest.TestCase):
         with self.assertRaisesRegex(WorkflowValidationError, r"exactly.*main"):
             validate_pages_workflow(FIXTURES / "main-excluded.yml")
 
+    def test_rejects_paths_ignore_that_disables_all_push_deployments(self) -> None:
+        with self.assertRaisesRegex(WorkflowValidationError, r"on\.push.*branches"):
+            validate_pages_workflow(FIXTURES / "paths-ignore-all.yml")
+
     def test_rejects_job_permissions_that_override_top_level_grants(self) -> None:
         with self.assertRaisesRegex(WorkflowValidationError, r"jobs\.deploy\.permissions"):
             validate_pages_workflow(FIXTURES / "job-permissions-override.yml")

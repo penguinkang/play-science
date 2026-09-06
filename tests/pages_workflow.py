@@ -190,6 +190,11 @@ def validate_pages_workflow(path: Path) -> None:
     branches = _at(document, "on", "push", "branches")
     if branches != ["main"]:
         raise WorkflowValidationError("required path on.push.branches must be exactly ['main']")
+    push = _at(document, "on", "push")
+    if push != {"branches": ["main"]}:
+        raise WorkflowValidationError(
+            "required path on.push must contain exactly branches: ['main']"
+        )
     _require_equal(document, None, "on", "workflow_dispatch")
 
     _require_equal(document, "read", "permissions", "contents")

@@ -1,0 +1,1459 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Learn Q-learning by guiding an explorer through an interactive grid world.">
+  <title>Play Science — Q-Learning Quest</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    :root {
+      --sky: #7dd3fc;
+      --cloud: #f8fafc;
+      --ink: #172554;
+      --grass: #65a30d;
+      --grass-dark: #3f6212;
+      --coin: #facc15;
+      --panel: #fff8dc;
+      --accent: #ea580c;
+      --shadow: #1e3a8a;
+      --border: 4px;
+    }
+
+    * { box-sizing: border-box; }
+
+    html { overflow-x: clip; }
+
+    body {
+      min-height: 100svh;
+      margin: 0;
+      color: var(--ink);
+      background:
+        radial-gradient(circle at 16% 12%, var(--cloud) 0 4rem, transparent 4.1rem),
+        radial-gradient(circle at 82% 20%, var(--cloud) 0 3rem, transparent 3.1rem),
+        linear-gradient(var(--sky) 0 72%, #bef264 72% 78%, var(--grass) 78%);
+      font-family: "Courier New", Courier, monospace;
+      font-size: clamp(.9375rem, .9rem + .2vw, 1rem);
+    }
+
+    button, summary { font: inherit; }
+
+    .page-shell {
+      width: min(1180px, calc(100% - clamp(1.25rem, 4vw, 2rem)));
+      margin-inline: auto;
+      padding-block: clamp(1.5rem, 5vw, 4rem);
+    }
+
+    .pixel-panel {
+      border: var(--border) solid var(--ink);
+      border-radius: 2px;
+      background: var(--panel);
+      box-shadow: 8px 8px 0 var(--shadow);
+    }
+
+    .pixel-button {
+      min-height: 44px;
+      border: 3px solid var(--ink);
+      padding: .65rem 1rem;
+      background: var(--coin);
+      color: var(--ink);
+      box-shadow: 4px 4px 0 var(--shadow);
+      font-weight: 900;
+      text-transform: uppercase;
+      transition: translate 100ms ease, box-shadow 100ms ease;
+    }
+
+    .pixel-button:hover { background: #fde047; }
+    .pixel-button:active { translate: 3px 3px; box-shadow: 1px 1px 0 var(--shadow); }
+    .pixel-button:focus-visible, summary:focus-visible, input:focus-visible, canvas:focus-visible {
+      outline: 4px solid white;
+      outline-offset: 3px;
+      box-shadow: 0 0 0 7px var(--ink);
+    }
+
+    .game-library {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(min(16rem, 100%), 1fr));
+      gap: 1.5rem;
+      margin-block-start: 2rem;
+    }
+
+    .game-tile {
+      display: flex;
+      min-height: 17rem;
+      flex-direction: column;
+      justify-content: space-between;
+      padding: 1.25rem;
+    }
+
+    .game-tile h2 { font-size: 1.35rem; font-weight: 900; }
+    .game-tile p { margin-block: .75rem; line-height: 1.6; }
+    .coming-soon { filter: saturate(.55); background: #e2e8f0; }
+    .badge {
+      width: max-content;
+      border: 2px solid currentColor;
+      padding: .2rem .5rem;
+      background: white;
+      font-size: .75rem;
+      font-weight: 900;
+      text-transform: uppercase;
+    }
+
+    .game-layout {
+      display: grid;
+      gap: 1.5rem;
+      align-items: start;
+    }
+
+    .game-layout > *, .stack, aside { min-width: 0; }
+
+    @media (min-width: 900px) {
+      .game-layout { grid-template-columns: minmax(0, 3fr) minmax(19rem, 2fr); }
+    }
+
+    .stack { display: grid; gap: 1rem; }
+    .section-pad { padding: clamp(1rem, 3vw, 1.5rem); }
+
+    canvas {
+      display: block;
+      width: 100%;
+      max-width: 100%;
+      border: 3px solid var(--ink);
+      background: #dbeafe;
+      image-rendering: pixelated;
+    }
+
+    #world-canvas { aspect-ratio: 1 / 1; }
+    #reward-chart { height: 10rem; background: white; }
+
+    .sr-only {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      padding: 0;
+      margin: -1px;
+      overflow: hidden;
+      clip: rect(0, 0, 0, 0);
+      white-space: nowrap;
+      border: 0;
+    }
+
+    [data-view-mode][aria-pressed="true"] {
+      background: var(--ink);
+      color: white;
+      box-shadow: 2px 2px 0 var(--accent);
+    }
+
+    .control-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: .75rem;
+    }
+
+    .control-row > * { flex: 1 1 10rem; }
+    .secondary { background: #f8fafc; }
+    .danger { background: #fca5a5; }
+
+    #waiting-status {
+      border: 3px solid var(--ink);
+      padding: .8rem 1rem;
+      background: #fef08a;
+      box-shadow: 4px 4px 0 var(--accent);
+      font-weight: 900;
+      line-height: 1.5;
+    }
+
+    .stats {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(8rem, 1fr));
+      gap: .5rem;
+    }
+
+    .stat {
+      border: 2px solid var(--ink);
+      padding: .65rem;
+      background: white;
+    }
+
+    .stat dt { font-size: .72rem; font-weight: 900; text-transform: uppercase; }
+    .stat dd { margin: .25rem 0 0; font-size: 1.1rem; font-weight: 900; }
+
+    #formula-inspector {
+      max-height: 72svh;
+      overflow-y: auto;
+      overflow-wrap: anywhere;
+      overscroll-behavior: contain;
+      scrollbar-gutter: stable;
+    }
+
+    .formula-card {
+      border-inline-start: .5rem solid var(--accent);
+      min-width: 0;
+      padding: 1rem;
+      background: #f1f5f9;
+      transition: background 160ms ease, translate 160ms ease, box-shadow 160ms ease;
+    }
+
+    .formula-card + .formula-card { margin-block-start: .75rem; }
+    .formula-card[data-revealed="true"] { background: white; }
+    .formula-card.is-active {
+      translate: .2rem 0;
+      box-shadow: inset 0 0 0 3px var(--coin);
+      animation: phase-pop 260ms ease-out;
+    }
+    .formula {
+      min-width: 0;
+      margin-block-start: .5rem;
+      font-weight: 900;
+      line-height: 1.7;
+      overflow-wrap: anywhere;
+      white-space: normal;
+    }
+    @keyframes phase-pop {
+      from { translate: -.25rem 0; }
+      to { translate: .2rem 0; }
+    }
+    .alpha { color: #1d4ed8; }
+    .gamma { color: #7e22ce; }
+    .reward { color: #92400e; }
+    .q-value { color: #15803d; }
+    .target { color: #c2410c; }
+
+    #subtitle {
+      border: 3px solid var(--ink);
+      padding: 1rem;
+      background: #111827;
+      color: white;
+      line-height: 1.6;
+    }
+
+    details { padding: clamp(1rem, 3vw, 1.5rem); }
+    summary { cursor: pointer; font-weight: 900; }
+    details p { margin-block-start: .75rem; line-height: 1.65; }
+    .tutorial-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(min(13rem, 100%), 1fr));
+      gap: .75rem;
+      margin-block-start: 1rem;
+    }
+    .tutorial-term {
+      border: 2px solid var(--ink);
+      padding: .75rem;
+      background: white;
+    }
+    .tutorial-term dt { font-weight: 900; }
+    .tutorial-term dd { margin: .35rem 0 0; line-height: 1.55; }
+
+    @media (max-width: 479px) {
+      .page-shell { padding-block: 1rem 2rem; }
+      .pixel-panel { box-shadow: 5px 5px 0 var(--shadow); }
+      .game-library, .game-layout { gap: 1rem; }
+      .game-tile { min-height: 15rem; padding: 1rem; }
+      .control-row { gap: .6rem; }
+      .control-row > * { flex-basis: 8.5rem; padding-inline: .65rem; }
+    }
+
+    [hidden] { display: none !important; }
+
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after {
+        animation-duration: .001ms !important;
+        animation-iteration-count: 1 !important;
+        scroll-behavior: auto !important;
+        transition: none !important;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main class="page-shell">
+    <section id="landing-screen" aria-labelledby="library-title">
+      <header class="pixel-panel section-pad text-center">
+        <p class="font-black uppercase tracking-[.2em]">Insert curiosity</p>
+        <h1 id="library-title" class="mt-2 text-4xl font-black sm:text-6xl">Play Science</h1>
+        <p class="mx-auto mt-4 max-w-2xl text-lg">Experiment, make predictions, and learn by playing.</p>
+      </header>
+
+      <div class="game-library" aria-label="Science game library">
+        <article class="game-tile pixel-panel">
+          <div>
+            <span class="badge">Playable</span>
+            <div class="mt-4 text-5xl" aria-hidden="true">🤖 🪙 🏁</div>
+            <h2 class="mt-4">Q-Learning Quest</h2>
+            <p>Guide a tiny explorer and watch rewards turn into a smarter route.</p>
+          </div>
+          <button class="pixel-button" type="button" data-open-game>Play quest</button>
+        </article>
+
+        <article class="game-tile pixel-panel coming-soon">
+          <div>
+            <span class="badge">Coming soon</span>
+            <div class="mt-4 text-5xl" aria-hidden="true">🧬</div>
+            <h2 class="mt-4">Genome Garden</h2>
+            <p>Mix traits and discover how inheritance shapes a population.</p>
+          </div>
+        </article>
+
+        <article class="game-tile pixel-panel coming-soon">
+          <div>
+            <span class="badge">Coming soon</span>
+            <div class="mt-4 text-5xl" aria-hidden="true">🪐</div>
+            <h2 class="mt-4">Orbit Lab</h2>
+            <p>Balance speed and gravity to place satellites in orbit.</p>
+          </div>
+        </article>
+      </div>
+    </section>
+
+    <section id="game-screen" aria-labelledby="game-title" hidden>
+      <header class="mb-6 flex flex-wrap items-center justify-between gap-4">
+        <div>
+          <p class="font-black uppercase tracking-[.16em]">Play Science</p>
+          <h1 id="game-title" tabindex="-1" class="text-3xl font-black sm:text-5xl">Q-Learning Quest</h1>
+        </div>
+        <button class="pixel-button secondary" type="button" data-close-game>← Back to game library</button>
+      </header>
+
+      <div class="game-layout">
+        <div class="stack">
+          <section class="pixel-panel section-pad" aria-labelledby="world-title">
+            <div class="mb-3 flex flex-wrap items-center justify-between gap-3">
+              <h2 id="world-title" class="text-xl font-black">Grid world</h2>
+              <div class="control-row" role="group" aria-label="World view">
+                <button class="pixel-button secondary" type="button" data-view-mode="world" aria-pressed="true">World</button>
+                <button class="pixel-button secondary" type="button" data-view-mode="q-arrows" aria-pressed="false">Q-Arrows</button>
+                <button class="pixel-button secondary" type="button" data-view-mode="heatmap" aria-pressed="false">Heatmap</button>
+              </div>
+            </div>
+            <canvas id="world-canvas" width="600" height="600" role="img" tabindex="0" aria-label="Six by six Q-learning world. When training pauses, select Continue, press a character key while focus is not in a control, or click the world." aria-describedby="world-summary"></canvas>
+            <p id="world-summary" class="sr-only"></p>
+          </section>
+
+          <section class="pixel-panel section-pad stack" aria-labelledby="training-title">
+            <h2 id="training-title" class="text-xl font-black">Training controls</h2>
+            <div class="control-row" role="group" aria-label="Training actions">
+              <button id="step-button" class="pixel-button" type="button">Step</button>
+              <button id="continue-button" class="pixel-button secondary" type="button" hidden>Continue</button>
+              <button id="fast-episode-button" class="pixel-button secondary" type="button">Fast episode</button>
+              <button id="train-100-button" class="pixel-button secondary" type="button">Train 100</button>
+              <button id="reset-button" class="pixel-button danger" type="button">Reset</button>
+            </div>
+            <p id="waiting-status" role="status" aria-live="polite" aria-atomic="true" hidden>
+              Training paused after this step. Select Continue, press a character key while focus is not in a control, or click the world to keep training. Navigation, function, and modifier keys do not continue.
+            </p>
+
+            <dl class="stats" aria-label="Training statistics">
+              <div class="stat"><dt>Episodes</dt><dd>0</dd></div>
+              <div class="stat"><dt>Reward</dt><dd>0</dd></div>
+              <div class="stat"><dt>Steps</dt><dd>0</dd></div>
+              <div class="stat"><dt>Epsilon</dt><dd>1.00</dd></div>
+            </dl>
+
+            <label class="font-bold" for="learning-rate">Learning rate α <output>0.10</output></label>
+            <input id="learning-rate" type="range" min="0" max="1" step="0.01" value="0.1">
+            <label class="font-bold" for="discount-rate">Future reward γ <output>0.99</output></label>
+            <input id="discount-rate" type="range" min="0" max="1" step="0.01" value="0.99">
+            <label class="font-bold" for="animation-speed">Animation speed</label>
+            <input id="animation-speed" type="range" min="100" max="1500" step="100" value="700">
+          </section>
+
+          <section class="pixel-panel section-pad" aria-labelledby="returns-title">
+            <h2 id="returns-title" class="mb-3 text-xl font-black">Episode returns</h2>
+            <canvas id="reward-chart" width="600" height="180" role="img" aria-label="Recent episode reward chart" aria-describedby="reward-chart-summary"></canvas>
+            <p id="reward-chart-summary" class="sr-only"></p>
+          </section>
+        </div>
+
+        <aside class="stack">
+          <section id="formula-inspector" class="pixel-panel section-pad" aria-labelledby="formula-title" data-inspector-phase="idle" data-value-precision="6">
+            <h2 id="formula-title" class="text-xl font-black">Formula inspector</h2>
+            <p class="my-3">Follow one update from observation to reflection. Values use six decimal places; ≈ marks a result rounded to that precision.</p>
+            <ol>
+              <li class="formula-card" data-phase="1" data-revealed="false"><strong>1. Current state</strong><p class="formula"><span class="q-value">Q(s, a)</span></p></li>
+              <li class="formula-card" data-phase="2" data-revealed="false"><strong>2. Take action</strong><p class="formula"><span class="reward">R</span> and next state s′</p></li>
+              <li class="formula-card" data-phase="3" data-revealed="false"><strong>3. Find the target</strong><p class="formula"><span class="target">Target</span> = <span class="reward">R</span> + <span class="gamma">γ</span> max <span class="q-value">Q(s′, a′)</span></p></li>
+              <li class="formula-card" data-phase="4" data-revealed="false"><strong>4. Update the value</strong><p class="formula"><span class="q-value">Q new</span> = (1 − <span class="alpha">α</span>) Q old + <span class="alpha">α</span> <span class="target">Target</span></p></li>
+              <li class="formula-card" data-phase="5" data-revealed="false"><strong>5. Reflect</strong><p class="formula">Compare the old and new <span class="q-value">Q-values</span>.</p></li>
+            </ol>
+          </section>
+
+          <section class="pixel-panel section-pad" aria-labelledby="subtitle-title">
+            <div class="mb-3 flex flex-wrap items-center justify-between gap-3">
+              <h2 id="subtitle-title" class="text-xl font-black">Learning subtitles</h2>
+              <button id="subtitle-toggle" class="pixel-button secondary" type="button" aria-pressed="true">Subtitles on</button>
+            </div>
+            <p id="subtitle" role="status" aria-live="polite" aria-atomic="true">Press Step to see how one action changes what the explorer knows.</p>
+          </section>
+
+          <details id="q-learning-tutorial" class="pixel-panel">
+            <summary>How does Q-learning work?</summary>
+            <p>Q-learning lets the explorer learn by trying moves, seeing what happens, and updating one remembered value at a time. The five cards in the Formula inspector show that loop.</p>
+            <dl class="tutorial-grid">
+              <div class="tutorial-term" data-tutorial-term="agent">
+                <dt>Agent</dt>
+                <dd>The robot explorer that learns which route to take.</dd>
+              </div>
+              <div class="tutorial-term" data-tutorial-term="state">
+                <dt>State (s)</dt>
+                <dd>The explorer’s current grid square—the situation it observes before moving.</dd>
+              </div>
+              <div class="tutorial-term" data-tutorial-term="action">
+                <dt>Action (a)</dt>
+                <dd>One move up, right, down, or left chosen from the current state.</dd>
+              </div>
+              <div class="tutorial-term" data-tutorial-term="reward">
+                <dt>Reward (R)</dt>
+                <dd>Immediate feedback: −1 for a move, +10 for a coin, −50 for a hazard, or +100 for the goal.</dd>
+              </div>
+              <div class="tutorial-term" data-tutorial-term="q-value">
+                <dt>Q-value: Q(s, a)</dt>
+                <dd>A learned estimate of how useful an action is in a state. Larger values point toward more rewarding routes.</dd>
+              </div>
+              <div class="tutorial-term" data-tutorial-term="alpha">
+                <dt>Learning rate (α, alpha)</dt>
+                <dd>How strongly one new experience changes the old Q-value. Raise the α slider to learn faster from each move.</dd>
+              </div>
+              <div class="tutorial-term" data-tutorial-term="gamma">
+                <dt>Future reward (γ, gamma)</dt>
+                <dd>How much later rewards matter now. Raise the γ slider to value rewards farther along a route.</dd>
+              </div>
+              <div class="tutorial-term" data-tutorial-term="epsilon">
+                <dt>Exploration (ε, epsilon)</dt>
+                <dd>The chance of trying a random action instead of a best-known action. It shrinks as episodes finish.</dd>
+              </div>
+            </dl>
+          </details>
+        </aside>
+      </div>
+    </section>
+  </main>
+
+  <script>
+    const GRID_ROWS = 6;
+    const GRID_COLUMNS = 6;
+    const ACTIONS = Object.freeze(["up", "right", "down", "left"]);
+    const ACTION_DELTAS = Object.freeze({
+      up: Object.freeze([-1, 0]),
+      right: Object.freeze([0, 1]),
+      down: Object.freeze([1, 0]),
+      left: Object.freeze([0, -1]),
+    });
+    const START_STATE = Object.freeze([0, 0]);
+    const ENTITIES = Object.freeze({
+      coins: Object.freeze([Object.freeze([0, 2]), Object.freeze([3, 4])]),
+      hazards: Object.freeze([Object.freeze([2, 3]), Object.freeze([4, 1])]),
+      goal: Object.freeze([5, 5]),
+    });
+    const REWARDS = Object.freeze({ normal: -1, coin: 10, goal: 100, hazard: -50 });
+    const DEFAULTS = Object.freeze({ alpha: 0.1, gamma: 0.99, epsilon: 1, epsilonDecay: 0.995 });
+    const EPSILON_MIN = 0.02;
+    const MAX_EPISODE_STEPS = 100;
+    const VALUE_PRECISION = 6;
+
+    let qTable;
+    let state;
+    let alpha;
+    let gamma;
+    let epsilon;
+    let episodes;
+    let steps;
+    let episodeReturn;
+    let returnHistory;
+    let remainingCoins;
+    let viewMode = "world";
+    let currentTransition = null;
+    let activeMovementAnimation = null;
+    let activePhaseDelay = null;
+    let activeContinuation = null;
+    let pendingAnimatedTransition = null;
+    let stepRunToken = 0;
+    let stepBusy = false;
+    let controlsRunning = false;
+    let movement = { active: false, progress: 1, row: START_STATE[0], column: START_STATE[1] };
+    const redraws = { world: 0, chart: 0 };
+    let chartPoints = 0;
+
+    const stateIndex = ([row, column]) => row * GRID_COLUMNS + column;
+    const actionIndex = (action) => {
+      const index = ACTIONS.indexOf(action);
+      if (index === -1) throw new RangeError(`Unknown action: ${action}`);
+      return index;
+    };
+    const sameState = ([rowA, columnA], [rowB, columnB]) => rowA === rowB && columnA === columnB;
+    const containsState = (states, candidate) => states.some((item) => sameState(item, candidate));
+    const copyState = (value) => Object.freeze([...value]);
+    const quantizeValue = (value) => Number(value.toFixed(VALUE_PRECISION));
+
+    function getQ(currentState, action) {
+      return qTable[stateIndex(currentState)][actionIndex(action)];
+    }
+
+    function setQ(currentState, action, value) {
+      if (!Number.isFinite(value)) throw new TypeError("Q-value must be finite");
+      qTable[stateIndex(currentState)][actionIndex(action)] = quantizeValue(value);
+    }
+
+    function transition(currentState, action) {
+      const delta = ACTION_DELTAS[action];
+      if (!delta) actionIndex(action);
+      const [rowDelta, columnDelta] = delta;
+      const nextState = [
+        Math.max(0, Math.min(GRID_ROWS - 1, currentState[0] + rowDelta)),
+        Math.max(0, Math.min(GRID_COLUMNS - 1, currentState[1] + columnDelta)),
+      ];
+      if (sameState(nextState, ENTITIES.goal)) {
+        return Object.freeze({ nextState: copyState(nextState), reward: REWARDS.goal, terminal: true });
+      }
+      if (containsState(ENTITIES.hazards, nextState)) {
+        return Object.freeze({ nextState: copyState(nextState), reward: REWARDS.hazard, terminal: true });
+      }
+      const coinIndex = remainingCoins.findIndex((coin) => sameState(coin, nextState));
+      if (coinIndex !== -1) {
+        remainingCoins.splice(coinIndex, 1);
+        return Object.freeze({ nextState: copyState(nextState), reward: REWARDS.coin, terminal: false });
+      }
+      return Object.freeze({ nextState: copyState(nextState), reward: REWARDS.normal, terminal: false });
+    }
+
+    function chooseAction(currentState, random = Math.random) {
+      if (random() < epsilon) return ACTIONS[Math.floor(random() * ACTIONS.length)];
+      const values = ACTIONS.map((action) => getQ(currentState, action));
+      const maximum = Math.max(...values);
+      const bestActions = ACTIONS.filter((_, index) => values[index] === maximum);
+      return bestActions[Math.floor(random() * bestActions.length)];
+    }
+
+    function calculateTransition({ state: currentState, action, nextState, reward, terminal }) {
+      const oldQ = getQ(currentState, action);
+      const maxNextQ = terminal ? 0 : Math.max(...ACTIONS.map((nextAction) => getQ(nextState, nextAction)));
+      const target = quantizeValue(reward + gamma * maxNextQ);
+      const newQ = quantizeValue(oldQ + alpha * (target - oldQ));
+      return Object.freeze({
+        state: copyState(currentState),
+        action,
+        oldQ,
+        nextState: copyState(nextState),
+        reward,
+        terminal,
+        maxNextQ,
+        target,
+        newQ,
+        deltaQ: quantizeValue(newQ - oldQ),
+      });
+    }
+
+    function commitTransition(record) {
+      setQ(record.state, record.action, record.newQ);
+    }
+
+    function updateStats() {
+      const values = document.querySelectorAll(".stats dd");
+      values[0].textContent = String(episodes);
+      values[1].textContent = String(episodeReturn);
+      values[2].textContent = String(steps);
+      values[3].textContent = epsilon.toFixed(2);
+    }
+
+    function finishEpisode(terminal) {
+      const summary = Object.freeze({ return: episodeReturn, steps, terminal });
+      returnHistory.push(episodeReturn);
+      episodes += 1;
+      epsilon = Math.max(EPSILON_MIN, epsilon * DEFAULTS.epsilonDecay);
+      state = [...START_STATE];
+      steps = 0;
+      episodeReturn = 0;
+      remainingCoins = ENTITIES.coins.map((coin) => [...coin]);
+      updateStats();
+      return summary;
+    }
+
+    function performStep(random = Math.random) {
+      const action = chooseAction(state, random);
+      const outcome = transition(state, action);
+      const record = calculateTransition({ state, action, ...outcome });
+      commitTransition(record);
+      state = [...outcome.nextState];
+      steps += 1;
+      episodeReturn += outcome.reward;
+      const summary = outcome.terminal || steps >= MAX_EPISODE_STEPS
+        ? finishEpisode(outcome.terminal)
+        : null;
+      updateStats();
+      return Object.freeze({ record, summary });
+    }
+
+    function runEpisode(random = Math.random) {
+      let summary = null;
+      while (!summary) summary = performStep(random).summary;
+      return summary;
+    }
+
+    function reset() {
+      cancelAnimatedRun();
+      qTable = Array.from({ length: GRID_ROWS * GRID_COLUMNS }, () => Array(ACTIONS.length).fill(0));
+      state = [...START_STATE];
+      alpha = DEFAULTS.alpha;
+      gamma = DEFAULTS.gamma;
+      epsilon = DEFAULTS.epsilon;
+      episodes = 0;
+      steps = 0;
+      episodeReturn = 0;
+      returnHistory = [];
+      remainingCoins = ENTITIES.coins.map((coin) => [...coin]);
+      const alphaInput = document.querySelector("#learning-rate");
+      const gammaInput = document.querySelector("#discount-rate");
+      alphaInput.value = String(alpha);
+      gammaInput.value = String(gamma);
+      alphaInput.previousElementSibling.querySelector("output").value = alpha.toFixed(2);
+      gammaInput.previousElementSibling.querySelector("output").value = gamma.toFixed(2);
+      updateStats();
+      currentTransition = null;
+      movement = { active: false, progress: 1, row: state[0], column: state[1] };
+      resetInspector();
+      renderAll();
+    }
+
+    function snapshot() {
+      return {
+        rows: GRID_ROWS,
+        columns: GRID_COLUMNS,
+        actions: [...ACTIONS],
+        state: [...state],
+        alpha,
+        gamma,
+        epsilon,
+        epsilonDecay: DEFAULTS.epsilonDecay,
+        epsilonMin: EPSILON_MIN,
+        episodes,
+        steps,
+        episodeReturn,
+        remainingCoins: remainingCoins.map((coin) => [...coin]),
+        returnHistory: [...returnHistory],
+        qTable: qTable.map((row) => [...row]),
+      };
+    }
+
+    const worldCanvas = document.querySelector("#world-canvas");
+    const rewardChart = document.querySelector("#reward-chart");
+    const worldSummary = document.querySelector("#world-summary");
+    const rewardChartSummary = document.querySelector("#reward-chart-summary");
+    const worldContext = worldCanvas.getContext("2d");
+    const chartContext = rewardChart.getContext("2d");
+
+    function canvasSize(canvas) {
+      const ratio = Math.max(1, window.devicePixelRatio || 1);
+      const cssWidth = canvas.clientWidth;
+      const cssHeight = canvas.clientHeight;
+      const width = Math.max(1, Math.round(cssWidth * ratio));
+      const height = Math.max(1, Math.round(cssHeight * ratio));
+      if (canvas.width !== width || canvas.height !== height) {
+        canvas.width = width;
+        canvas.height = height;
+      }
+      return { width: cssWidth, height: cssHeight, ratio };
+    }
+
+    function prepareCanvas(canvas, context) {
+      const size = canvasSize(canvas);
+      context.setTransform(size.ratio, 0, 0, size.ratio, 0, 0);
+      context.clearRect(0, 0, size.width, size.height);
+      return size;
+    }
+
+    function cellCenter(cell, cellWidth, cellHeight) {
+      return {
+        x: (cell[1] + 0.5) * cellWidth,
+        y: (cell[0] + 0.5) * cellHeight,
+      };
+    }
+
+    function maxQValues() {
+      return qTable.map((values) => Math.max(...values));
+    }
+
+    const describeCell = ([row, column]) => `row ${row}, column ${column}`;
+
+    function joinWords(words) {
+      if (words.length < 2) return words[0] || "";
+      return `${words.slice(0, -1).join(", ")} and ${words.at(-1)}`;
+    }
+
+    function learnedStateSummaries() {
+      const learned = [];
+      for (let row = 0; row < GRID_ROWS; row += 1) {
+        for (let column = 0; column < GRID_COLUMNS; column += 1) {
+          const cell = [row, column];
+          if (sameState(cell, ENTITIES.goal) || containsState(ENTITIES.hazards, cell)) continue;
+          const values = ACTIONS.map((action) => getQ(cell, action));
+          if (!values.some((value) => value !== 0)) continue;
+          const maximum = Math.max(...values);
+          learned.push({
+            cell,
+            maximum,
+            bestActions: ACTIONS.filter((_, index) => values[index] === maximum),
+            significance: Math.max(...values.map((value) => Math.abs(value))),
+          });
+        }
+      }
+      return learned.sort((first, second) => second.significance - first.significance
+        || first.cell[0] - second.cell[0] || first.cell[1] - second.cell[1]);
+    }
+
+    const describeHeatmapCell = ({ cell, value }) => `${describeCell(cell)}, ${formatValue(value)}`;
+
+    function updateWorldSummary() {
+      const coins = remainingCoins.length
+        ? remainingCoins.map(describeCell).join("; ")
+        : "none";
+      const hazards = ENTITIES.hazards.map(describeCell).join("; ");
+      let modeDescription;
+      if (viewMode === "q-arrows") {
+        const learned = learnedStateSummaries();
+        if (!learned.length) {
+          modeDescription = "Q-Arrows view. No learned nonzero Q-values yet.";
+        } else {
+          const shown = learned.slice(0, 8).map(({ cell, maximum, bestActions }) => {
+            const actionLabel = bestActions.length === 1 ? "best action" : "best actions";
+            return `${describeCell(cell)}: ${actionLabel} ${joinWords(bestActions)}, value ${formatValue(maximum)}`;
+          });
+          const countLabel = `${learned.length} learned state${learned.length === 1 ? "" : "s"}`;
+          const shownLabel = learned.length > shown.length
+            ? `Showing ${shown.length} most significant: `
+            : "";
+          modeDescription = `Q-Arrows view. ${countLabel}. ${shownLabel}${shown.join("; ")}.`;
+        }
+      } else if (viewMode === "heatmap") {
+        const values = maxQValues();
+        const meaningful = values
+          .map((value, index) => ({
+            cell: [Math.floor(index / GRID_COLUMNS), index % GRID_COLUMNS],
+            value,
+          }))
+          .filter(({ value }) => value !== 0);
+        const hottest = [...meaningful]
+          .sort((first, second) => second.value - first.value
+            || first.cell[0] - second.cell[0] || first.cell[1] - second.cell[1])
+          .slice(0, 3)
+          .map(describeHeatmapCell);
+        const coldest = [...meaningful]
+          .sort((first, second) => first.value - second.value
+            || first.cell[0] - second.cell[0] || first.cell[1] - second.cell[1])
+          .slice(0, 3)
+          .map(describeHeatmapCell);
+        const spatialDescription = meaningful.length
+          ? ` Hottest learned cells: ${hottest.join("; ")}. Coldest learned cells: ${coldest.join("; ")}.`
+          : " No learned nonzero heatmap cells yet.";
+        modeDescription = `Heatmap view. State maximum Q range: ${formatValue(Math.min(...values))} to ${formatValue(Math.max(...values))}. Current cell maximum Q: ${formatValue(Math.max(...qTable[stateIndex(state)]))}.${spatialDescription}`;
+      } else if (currentTransition) {
+        modeDescription = `World view. Current transition: ${describeCell(currentTransition.state)} moving ${currentTransition.action} to ${describeCell(currentTransition.nextState)}, reward ${currentTransition.reward}.`;
+      } else {
+        modeDescription = "World view. Shows the explorer and reward locations.";
+      }
+      worldSummary.textContent = `${modeDescription} Agent: ${describeCell(state)}. Goal: ${describeCell(ENTITIES.goal)}. Coins remaining: ${coins}. Hazards: ${hazards}.`;
+    }
+
+    function drawGround(context, width, height, cellWidth, cellHeight) {
+      for (let row = 0; row < GRID_ROWS; row += 1) {
+        for (let column = 0; column < GRID_COLUMNS; column += 1) {
+          context.fillStyle = (row + column) % 2 === 0 ? "#a3e635" : "#84cc16";
+          context.fillRect(column * cellWidth, row * cellHeight, cellWidth, cellHeight);
+        }
+      }
+
+      if (viewMode === "heatmap") {
+        const values = maxQValues();
+        const minimum = Math.min(...values);
+        const maximum = Math.max(...values);
+        const range = maximum - minimum;
+        values.forEach((value, index) => {
+          const normalized = range === 0 ? 0.5 : (value - minimum) / range;
+          const row = Math.floor(index / GRID_COLUMNS);
+          const column = index % GRID_COLUMNS;
+          context.fillStyle = `hsla(${220 - normalized * 180}, 85%, 50%, .7)`;
+          context.fillRect(column * cellWidth, row * cellHeight, cellWidth, cellHeight);
+        });
+      }
+
+      context.strokeStyle = "rgba(23, 37, 84, .45)";
+      context.lineWidth = 1;
+      for (let line = 0; line <= GRID_ROWS; line += 1) {
+        context.beginPath();
+        context.moveTo(0, line * cellHeight);
+        context.lineTo(width, line * cellHeight);
+        context.stroke();
+      }
+      for (let line = 0; line <= GRID_COLUMNS; line += 1) {
+        context.beginPath();
+        context.moveTo(line * cellWidth, 0);
+        context.lineTo(line * cellWidth, height);
+        context.stroke();
+      }
+    }
+
+    function drawHighlight(context, cell, cellWidth, cellHeight, color, inset) {
+      context.save();
+      context.strokeStyle = color;
+      context.lineWidth = Math.max(2, Math.min(cellWidth, cellHeight) * 0.06);
+      context.strokeRect(
+        cell[1] * cellWidth + inset,
+        cell[0] * cellHeight + inset,
+        cellWidth - inset * 2,
+        cellHeight - inset * 2,
+      );
+      context.restore();
+    }
+
+    function drawEmoji(context, emoji, cell, cellWidth, cellHeight, scale = 0.54) {
+      const center = cellCenter(cell, cellWidth, cellHeight);
+      context.save();
+      context.font = `${Math.max(14, Math.min(cellWidth, cellHeight) * scale)}px sans-serif`;
+      context.textAlign = "center";
+      context.textBaseline = "middle";
+      context.fillText(emoji, center.x, center.y);
+      context.restore();
+    }
+
+    function drawEntities(context, cellWidth, cellHeight) {
+      remainingCoins.forEach((coin) => drawEmoji(context, "🪙", coin, cellWidth, cellHeight, 0.42));
+      ENTITIES.hazards.forEach((hazard) => drawEmoji(context, "🌋", hazard, cellWidth, cellHeight));
+      drawEmoji(context, "🏁", ENTITIES.goal, cellWidth, cellHeight);
+    }
+
+    function drawArrow(context, x, y, action, length, color, lineWidth) {
+      const [rowDelta, columnDelta] = ACTION_DELTAS[action];
+      const endX = x + columnDelta * length;
+      const endY = y + rowDelta * length;
+      const angle = Math.atan2(endY - y, endX - x);
+      const head = Math.max(3, lineWidth * 2.3);
+      context.save();
+      context.strokeStyle = color;
+      context.fillStyle = color;
+      context.lineWidth = lineWidth;
+      context.lineCap = "round";
+      context.beginPath();
+      context.moveTo(x, y);
+      context.lineTo(endX, endY);
+      context.stroke();
+      context.beginPath();
+      context.moveTo(endX, endY);
+      context.lineTo(endX - head * Math.cos(angle - Math.PI / 6), endY - head * Math.sin(angle - Math.PI / 6));
+      context.lineTo(endX - head * Math.cos(angle + Math.PI / 6), endY - head * Math.sin(angle + Math.PI / 6));
+      context.closePath();
+      context.fill();
+      context.restore();
+    }
+
+    function drawQArrows(context, cellWidth, cellHeight) {
+      const absoluteMaximum = Math.max(1, ...qTable.flat().map((value) => Math.abs(value)));
+      for (let row = 0; row < GRID_ROWS; row += 1) {
+        for (let column = 0; column < GRID_COLUMNS; column += 1) {
+          const cell = [row, column];
+          if (sameState(cell, ENTITIES.goal) || containsState(ENTITIES.hazards, cell)) continue;
+          const center = cellCenter(cell, cellWidth, cellHeight);
+          ACTIONS.forEach((action) => {
+            const value = getQ(cell, action);
+            const magnitude = Math.abs(value) / absoluteMaximum;
+            const length = Math.min(cellWidth, cellHeight) * (0.1 + magnitude * 0.26);
+            const color = value > 0 ? "#15803d" : value < 0 ? "#dc2626" : "#475569";
+            drawArrow(context, center.x, center.y, action, length, color, 1 + magnitude * 3);
+          });
+        }
+      }
+    }
+
+    function drawAgent(context, cellWidth, cellHeight) {
+      const center = cellCenter([movement.row, movement.column], cellWidth, cellHeight);
+      context.save();
+      context.fillStyle = "rgba(255, 255, 255, .85)";
+      context.beginPath();
+      context.arc(center.x, center.y, Math.min(cellWidth, cellHeight) * 0.3, 0, Math.PI * 2);
+      context.fill();
+      context.font = `${Math.max(16, Math.min(cellWidth, cellHeight) * 0.5)}px sans-serif`;
+      context.textAlign = "center";
+      context.textBaseline = "middle";
+      context.fillText("🤖", center.x, center.y);
+      context.restore();
+    }
+
+    function renderWorld() {
+      updateWorldSummary();
+      const { width, height } = prepareCanvas(worldCanvas, worldContext);
+      if (width <= 0 || height <= 0) return;
+      redraws.world += 1;
+      const cellWidth = width / GRID_COLUMNS;
+      const cellHeight = height / GRID_ROWS;
+      drawGround(worldContext, width, height, cellWidth, cellHeight);
+      if (currentTransition) {
+        drawHighlight(worldContext, currentTransition.state, cellWidth, cellHeight, "#ea580c", 4);
+        drawHighlight(worldContext, currentTransition.nextState, cellWidth, cellHeight, "#facc15", 9);
+      } else {
+        drawHighlight(worldContext, state, cellWidth, cellHeight, "#f8fafc", 5);
+      }
+      if (viewMode === "q-arrows") drawQArrows(worldContext, cellWidth, cellHeight);
+      drawEntities(worldContext, cellWidth, cellHeight);
+      drawAgent(worldContext, cellWidth, cellHeight);
+    }
+
+    function returnChartLayout(values, width, height) {
+      const padding = { top: 18, right: 14, bottom: 22, left: 42 };
+      const plotWidth = Math.max(1, width - padding.left - padding.right);
+      const plotHeight = Math.max(1, height - padding.top - padding.bottom);
+      const dataMin = values.length ? Math.min(...values) : 0;
+      const dataMax = values.length ? Math.max(...values) : 0;
+      let minimum = Math.min(0, dataMin);
+      let maximum = Math.max(0, dataMax);
+      if (minimum === maximum) { minimum -= 1; maximum += 1; }
+      const yFor = (value) => padding.top + (maximum - value) / (maximum - minimum) * plotHeight;
+      const minimumLabelY = yFor(dataMin);
+      const maximumLabelY = yFor(dataMax);
+      return Object.freeze({
+        domain: Object.freeze({ minimum, maximum }),
+        plot: Object.freeze({
+          left: padding.left,
+          right: width - padding.right,
+          top: padding.top,
+          bottom: height - padding.bottom,
+          width: plotWidth,
+          height: plotHeight,
+        }),
+        labels: Object.freeze({
+          minimum: Object.freeze({
+            value: dataMin,
+            y: minimumLabelY,
+            visible: Math.abs(minimumLabelY - maximumLabelY) >= 14,
+          }),
+          maximum: Object.freeze({ value: dataMax, y: maximumLabelY, visible: true }),
+        }),
+        yFor,
+      });
+    }
+
+    function renderChart() {
+      const values = returnHistory.slice(-50);
+      if (!values.length) {
+        rewardChartSummary.textContent = "No episode returns yet.";
+      } else {
+        const recent = values.slice(-10);
+        const difference = values.at(-1) - values[0];
+        const trend = difference > 0 ? "improving" : difference < 0 ? "declining" : "steady";
+        rewardChartSummary.textContent = `Recent returns (${recent.length} of ${values.length} shown): ${recent.join(", ")}. Trend: ${trend}.`;
+      }
+      const { width, height } = prepareCanvas(rewardChart, chartContext);
+      if (width <= 0 || height <= 0) return;
+      redraws.chart += 1;
+      chartPoints = values.length;
+      chartContext.fillStyle = "#ffffff";
+      chartContext.fillRect(0, 0, width, height);
+      const layout = returnChartLayout(values, width, height);
+      const { plot, labels, yFor } = layout;
+
+      chartContext.strokeStyle = "#94a3b8";
+      chartContext.setLineDash([4, 4]);
+      chartContext.beginPath();
+      chartContext.moveTo(plot.left, yFor(0));
+      chartContext.lineTo(plot.right, yFor(0));
+      chartContext.stroke();
+      chartContext.setLineDash([]);
+      chartContext.fillStyle = "#172554";
+      chartContext.font = "bold 11px Courier New, monospace";
+      chartContext.textAlign = "right";
+      chartContext.textBaseline = "middle";
+      if (labels.maximum.visible) {
+        chartContext.fillText(String(labels.maximum.value), plot.left - 6, labels.maximum.y);
+      }
+      if (labels.minimum.visible) {
+        chartContext.fillText(String(labels.minimum.value), plot.left - 6, labels.minimum.y);
+      }
+      chartContext.textAlign = "left";
+      chartContext.textBaseline = "alphabetic";
+      chartContext.fillText("recent returns", plot.left, height - 6);
+
+      if (!values.length) return;
+      chartContext.strokeStyle = "#ea580c";
+      chartContext.lineWidth = 3;
+      chartContext.lineJoin = "round";
+      chartContext.beginPath();
+      values.forEach((value, index) => {
+        const x = values.length === 1
+          ? plot.left + plot.width / 2
+          : plot.left + index / (values.length - 1) * plot.width;
+        const y = yFor(value);
+        if (index === 0) chartContext.moveTo(x, y);
+        else chartContext.lineTo(x, y);
+      });
+      chartContext.stroke();
+    }
+
+    function renderAll() {
+      renderWorld();
+      renderChart();
+    }
+
+    function cancelMovement() {
+      const animation = activeMovementAnimation;
+      if (animation) {
+        if (animation.frameId) cancelAnimationFrame(animation.frameId);
+        if (animation.timeoutId) clearTimeout(animation.timeoutId);
+        activeMovementAnimation = null;
+      }
+      const logicalState = state || START_STATE;
+      movement = { active: false, progress: 1, row: logicalState[0], column: logicalState[1] };
+      if (animation) animation.resolve(Object.freeze({ canceled: true }));
+    }
+
+    const inspector = document.querySelector("#formula-inspector");
+    const subtitle = document.querySelector("#subtitle");
+    const stepButton = document.querySelector("#step-button");
+    const continueButton = document.querySelector("#continue-button");
+    const waitingStatus = document.querySelector("#waiting-status");
+    const fastEpisodeButton = document.querySelector("#fast-episode-button");
+    const train100Button = document.querySelector("#train-100-button");
+    const resetButton = document.querySelector("#reset-button");
+    const parameterInputs = [...document.querySelectorAll("#learning-rate, #discount-rate, #animation-speed")];
+    const phaseCards = [...inspector.querySelectorAll(".formula-card")];
+    const initialFormulaMarkup = phaseCards.map((card) => card.querySelector(".formula").innerHTML);
+    function formatValue(value) {
+      const rounded = Math.abs(value) < 0.5 * 10 ** -VALUE_PRECISION ? 0 : value;
+      return rounded.toFixed(VALUE_PRECISION);
+    }
+
+    function numericMarkup(value, className = "", extraAttributes = "") {
+      const classAttribute = className ? ` class="${className}"` : "";
+      return `<span${classAttribute} data-value="${value}"${extraAttributes}>${formatValue(value)}</span>`;
+    }
+
+    function formatState([row, column]) {
+      return `(${row}, ${column})`;
+    }
+
+    function formulaMarkup(record) {
+      return [
+        `State ${formatState(record.state)} · action ${record.action} · <span class="q-value">old Q = ${numericMarkup(record.oldQ)}</span>`,
+        `<span class="reward">R = ${record.reward}</span> · next state ${formatState(record.nextState)}`,
+        `${numericMarkup(record.reward, "reward")} + ${numericMarkup(record.gamma, "gamma")} × ${numericMarkup(record.maxNextQ, "q-value")} ≈ ${numericMarkup(record.target, "target")}`,
+        `(1 − ${numericMarkup(record.alpha, "alpha")}) × ${numericMarkup(record.oldQ, "q-value")} + ${numericMarkup(record.alpha, "alpha")} × ${numericMarkup(record.target, "target")} ≈ ${numericMarkup(record.newQ, "q-value")}`,
+        `<span class="q-value">${record.deltaQ >= 0 ? "+" : ""}${numericMarkup(record.deltaQ)}</span> · Q(${record.state[0]}, ${record.state[1]}, ${record.action}) = ${numericMarkup(record.newQ, "q-value", " data-new-q")}`,
+      ];
+    }
+
+    function subtitleForPhase(phase, record) {
+      const rewardWords = record.reward < 0 ? `minus ${formatValue(Math.abs(record.reward))}` : formatValue(record.reward);
+      const change = record.deltaQ > 0 ? "an increase" : record.deltaQ < 0 ? "a decrease" : "no change";
+      return {
+        1: `First, the explorer is at row ${record.state[0]}, column ${record.state[1]} and chooses ${record.action}. Its remembered value is ${formatValue(record.oldQ)}.`,
+        2: `Next, it receives a reward of ${rewardWords} and arrives at row ${record.nextState[0]}, column ${record.nextState[1]}.`,
+        3: `Now, that reward and a future value of ${formatValue(record.maxNextQ)} make a target of ${formatValue(record.target)}.`,
+        4: `Then, a learning rate of ${formatValue(record.alpha)} blends the old value into a new value of ${formatValue(record.newQ)}.`,
+        5: `Finally, it saves ${change} of ${formatValue(Math.abs(record.deltaQ))}, making this choice worth ${formatValue(record.newQ)}.`,
+      }[phase];
+    }
+
+    function setInspectorPhase(phase, record) {
+      const numericPhase = Number(phase);
+      if (record) {
+        const markup = formulaMarkup(record);
+        phaseCards.forEach((card, index) => {
+          if (index < numericPhase) card.querySelector(".formula").innerHTML = markup[index];
+        });
+      }
+      phaseCards.forEach((card, index) => {
+        const cardPhase = index + 1;
+        card.dataset.revealed = String(phase === "waiting" || cardPhase <= numericPhase);
+        card.classList.toggle("is-active", cardPhase === numericPhase);
+      });
+      const phaseSubtitle = record && subtitleForPhase(phase, record);
+      if (phaseSubtitle) subtitle.textContent = phaseSubtitle;
+      inspector.dataset.inspectorPhase = String(phase);
+    }
+
+    function resetInspector() {
+      phaseCards.forEach((card, index) => {
+        card.dataset.revealed = "false";
+        card.classList.remove("is-active");
+        card.querySelector(".formula").innerHTML = initialFormulaMarkup[index];
+      });
+      subtitle.textContent = "Press Step to see how one action changes what the explorer knows.";
+      inspector.dataset.inspectorPhase = "idle";
+      stepButton.hidden = false;
+      stepButton.disabled = false;
+      continueButton.hidden = true;
+      waitingStatus.hidden = true;
+    }
+
+    function setControlsRunning(running) {
+      controlsRunning = running;
+      stepButton.disabled = running;
+      fastEpisodeButton.disabled = running;
+      train100Button.disabled = running;
+      parameterInputs.forEach((input) => { input.disabled = running; });
+    }
+
+    function cancelPhaseDelay() {
+      if (!activePhaseDelay) return;
+      clearTimeout(activePhaseDelay.timer);
+      const resolve = activePhaseDelay.resolve;
+      activePhaseDelay = null;
+      resolve();
+    }
+
+    function cancelAnimatedRun() {
+      stepRunToken += 1;
+      stepBusy = false;
+      setControlsRunning(false);
+      if (activeContinuation) {
+        const continuation = activeContinuation;
+        activeContinuation = null;
+        continuation.resolve(false);
+      }
+      if (pendingAnimatedTransition) {
+        state = [...pendingAnimatedTransition.state];
+        remainingCoins = pendingAnimatedTransition.remainingCoins.map((coin) => [...coin]);
+        pendingAnimatedTransition = null;
+        currentTransition = null;
+      }
+      cancelPhaseDelay();
+      cancelMovement();
+    }
+
+    function waitForContinuation(token) {
+      return new Promise((resolve) => {
+        activeContinuation = { token, resolve };
+      });
+    }
+
+    function resolveContinuation() {
+      if (!activeContinuation) return false;
+      const continuation = activeContinuation;
+      activeContinuation = null;
+      continuation.resolve(true);
+      return true;
+    }
+
+    async function completeContinuation(token, completed, terminal) {
+      const shouldContinue = await waitForContinuation(token);
+      if (!shouldContinue || token !== stepRunToken) return;
+      if (completed) finishEpisode(terminal);
+      currentTransition = null;
+      movement = { active: false, progress: 1, row: state[0], column: state[1] };
+      resetInspector();
+      setControlsRunning(false);
+      renderAll();
+      stepButton.focus();
+    }
+
+    function waitForPhase(duration) {
+      return new Promise((resolve) => {
+        const delay = {
+          resolve,
+          timer: window.setTimeout(() => {
+            if (activePhaseDelay === delay) activePhaseDelay = null;
+            resolve();
+          }, Math.max(1, duration)),
+        };
+        activePhaseDelay = delay;
+      });
+    }
+
+    function animateMovement(from, to, duration) {
+      cancelMovement();
+      const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+      const movementDuration = reducedMotion ? 0 : Math.max(1, duration);
+      const startedAt = performance.now();
+      movement = { active: movementDuration > 0, progress: movementDuration > 0 ? 0 : 1, row: from[0], column: from[1] };
+      if (!movementDuration) {
+        movement.row = to[0];
+        movement.column = to[1];
+        renderWorld();
+        return waitForPhase(duration).then(() => Object.freeze({ canceled: false }));
+      }
+      return new Promise((resolve) => {
+        const animation = { resolve, frameId: 0, timeoutId: 0 };
+        activeMovementAnimation = animation;
+        const frame = (timestamp) => {
+          if (activeMovementAnimation !== animation) return;
+          const progress = Math.min(1, Math.max(0, (timestamp - startedAt) / movementDuration));
+          movement.progress = progress;
+          movement.row = from[0] + (to[0] - from[0]) * progress;
+          movement.column = from[1] + (to[1] - from[1]) * progress;
+          renderWorld();
+          if (progress < 1) scheduleFrame();
+          else {
+            animation.frameId = 0;
+            animation.timeoutId = 0;
+            activeMovementAnimation = null;
+            movement.active = false;
+            resolve(Object.freeze({ canceled: false }));
+          }
+        };
+        const scheduleFrame = () => {
+          let fired = false;
+          const tick = (timestamp) => {
+            if (fired || activeMovementAnimation !== animation) return;
+            fired = true;
+            if (animation.frameId) cancelAnimationFrame(animation.frameId);
+            if (animation.timeoutId) clearTimeout(animation.timeoutId);
+            animation.frameId = 0;
+            animation.timeoutId = 0;
+            frame(timestamp);
+          };
+          animation.frameId = requestAnimationFrame(tick);
+          animation.timeoutId = window.setTimeout(() => tick(performance.now()), 32);
+        };
+        scheduleFrame();
+      });
+    }
+
+    async function runAnimatedStep(random = Math.random) {
+      if (controlsRunning) return null;
+      stepBusy = true;
+      setControlsRunning(true);
+      continueButton.hidden = true;
+      const token = ++stepRunToken;
+      pendingAnimatedTransition = {
+        state: [...state],
+        remainingCoins: remainingCoins.map((coin) => [...coin]),
+      };
+      const action = chooseAction(state, random);
+      const outcome = transition(state, action);
+      const calculated = calculateTransition({ state, action, ...outcome });
+      const record = Object.freeze({ ...calculated, alpha, gamma });
+      currentTransition = record;
+      const speed = Number(document.querySelector("#animation-speed").value);
+      const canceledResult = () => Object.freeze({ record, summary: null, canceled: true });
+
+      setInspectorPhase(1, record);
+      await waitForPhase(speed);
+      if (token !== stepRunToken) return canceledResult();
+
+      setInspectorPhase(2, record);
+      const animation = await animateMovement(record.state, record.nextState, speed);
+      if (animation.canceled || token !== stepRunToken) return canceledResult();
+      state = [...outcome.nextState];
+      renderWorld();
+
+      setInspectorPhase(3, record);
+      await waitForPhase(speed);
+      if (token !== stepRunToken) return canceledResult();
+
+      setInspectorPhase(4, record);
+      await waitForPhase(speed);
+      if (token !== stepRunToken) return canceledResult();
+
+      commitTransition(record);
+      pendingAnimatedTransition = null;
+      steps += 1;
+      episodeReturn += outcome.reward;
+      const completed = outcome.terminal || steps >= MAX_EPISODE_STEPS;
+      const summary = completed
+        ? Object.freeze({ return: episodeReturn, steps, terminal: outcome.terminal })
+        : null;
+      updateStats();
+      setInspectorPhase(5, record);
+      renderWorld();
+      await waitForPhase(speed);
+      if (token !== stepRunToken) return canceledResult();
+
+      stepBusy = false;
+      stepButton.hidden = true;
+      continueButton.hidden = false;
+      waitingStatus.hidden = false;
+      continueButton.focus();
+      setControlsRunning(true);
+      subtitle.textContent = "Training is waiting. Select Continue, press a character key while focus is not in a control, or click the world when you are ready. Navigation, function, and modifier keys do not continue.";
+      setInspectorPhase("waiting", record);
+      void completeContinuation(token, completed, outcome.terminal);
+      return Object.freeze({ record, summary, canceled: false });
+    }
+
+    async function performAnimatedStep(random = Math.random) {
+      const result = await runAnimatedStep(random);
+      if (result && !result.canceled && inspector.dataset.inspectorPhase === "waiting") {
+        resolveContinuation();
+      }
+      return result;
+    }
+
+    function beginFastRun() {
+      if (controlsRunning) return null;
+      cancelAnimatedRun();
+      const token = stepRunToken;
+      setControlsRunning(true);
+      const summary = runEpisode();
+      if (token !== stepRunToken) return null;
+      currentTransition = null;
+      movement = { active: false, progress: 1, row: state[0], column: state[1] };
+      resetInspector();
+      setControlsRunning(false);
+      renderAll();
+      return summary;
+    }
+
+    const yieldToBrowser = () => new Promise((resolve) => window.setTimeout(resolve, 0));
+
+    async function trainEpisodes(count = 100) {
+      if (controlsRunning) return Object.freeze({ canceled: false, completed: 0 });
+      cancelAnimatedRun();
+      const token = stepRunToken;
+      setControlsRunning(true);
+      let completed = 0;
+      while (completed < count && token === stepRunToken) {
+        runEpisode();
+        completed += 1;
+        if (completed % 20 === 0) await yieldToBrowser();
+      }
+      const canceled = token !== stepRunToken;
+      if (!canceled) {
+        currentTransition = null;
+        movement = { active: false, progress: 1, row: state[0], column: state[1] };
+        resetInspector();
+        setControlsRunning(false);
+        renderAll();
+      }
+      return Object.freeze({ canceled, completed });
+    }
+
+    function visualSnapshot() {
+      return {
+        viewMode,
+        redraws: { ...redraws },
+        canvases: {
+          world: { width: worldCanvas.width, height: worldCanvas.height },
+          chart: { width: rewardChart.width, height: rewardChart.height },
+        },
+        movement: { ...movement },
+        stepBusy,
+        controlsRunning,
+        inspectorPhase: inspector.dataset.inspectorPhase,
+        chartPoints,
+      };
+    }
+
+    const learningRate = document.querySelector("#learning-rate");
+    const discountRate = document.querySelector("#discount-rate");
+    learningRate.addEventListener("input", () => {
+      alpha = Number(learningRate.value);
+      learningRate.previousElementSibling.querySelector("output").value = alpha.toFixed(2);
+    });
+    discountRate.addEventListener("input", () => {
+      gamma = Number(discountRate.value);
+      discountRate.previousElementSibling.querySelector("output").value = gamma.toFixed(2);
+    });
+
+    stepButton.addEventListener("click", () => { void runAnimatedStep(); });
+    continueButton.addEventListener("click", resolveContinuation);
+    fastEpisodeButton.addEventListener("click", beginFastRun);
+    train100Button.addEventListener("click", () => { void trainEpisodes(100); });
+    resetButton.addEventListener("click", reset);
+
+    const continuationInteractiveRoles = [
+      "button", "link", "checkbox", "radio", "switch", "combobox", "listbox",
+      "option", "slider", "spinbutton", "textbox", "searchbox", "scrollbar",
+      "menuitem", "menuitemcheckbox", "menuitemradio", "tab", "treeitem",
+      "gridcell", "grid", "menu", "menubar", "radiogroup", "tablist", "tree",
+      "treegrid",
+    ];
+    const continuationInteractiveSelector = [
+      "a[href]", "area[href]", "button", "input", "select", "textarea", "summary",
+      "audio[controls]", "video[controls]", "iframe", "embed", "object",
+      ...continuationInteractiveRoles.map((role) => `[role~='${role}']`),
+      "[role~='separator'][tabindex]", "[role~='columnheader'][tabindex]",
+      "[role~='rowheader'][tabindex]",
+    ].join(", ");
+
+    function isContinuationInteractiveTarget(target) {
+      if (!(target instanceof Element)) return false;
+      const editableRoot = target.closest("[contenteditable]");
+      if (editableRoot && editableRoot.isContentEditable) return true;
+      return Boolean(target.closest(continuationInteractiveSelector));
+    }
+
+    document.addEventListener("keydown", (event) => {
+      if (!activeContinuation || event.isComposing) return;
+      if (event.ctrlKey || event.altKey || event.metaKey
+        || event.key.length !== 1) return;
+      if (isContinuationInteractiveTarget(event.target)) return;
+      resolveContinuation();
+    });
+
+    document.addEventListener("click", (event) => {
+      if (!activeContinuation || !(event.target instanceof Element)) return;
+      if (isContinuationInteractiveTarget(event.target)
+        || event.target.closest("a, label, [contenteditable]")) return;
+      resolveContinuation();
+    });
+
+    document.querySelectorAll("[data-view-mode]").forEach((button) => {
+      button.addEventListener("click", () => {
+        viewMode = button.dataset.viewMode;
+        document.querySelectorAll("[data-view-mode]").forEach((candidate) => {
+          candidate.setAttribute("aria-pressed", String(candidate === button));
+        });
+        renderWorld();
+      });
+    });
+
+    reset();
+
+    const canvasResizeObserver = new ResizeObserver(() => renderAll());
+    canvasResizeObserver.observe(worldCanvas);
+    canvasResizeObserver.observe(rewardChart);
+    window.addEventListener("resize", renderAll);
+
+    window.__playScienceTest = Object.freeze({
+      snapshot,
+      reset,
+      transition,
+      chooseAction,
+      calculateTransition,
+      commitTransition,
+      getQ,
+      setQ,
+      setEpsilon(value) { epsilon = value; },
+      setState(value) {
+        if (!Array.isArray(value) || value.length !== 2
+          || !Number.isInteger(value[0]) || !Number.isInteger(value[1])
+          || value[0] < 0 || value[0] >= GRID_ROWS || value[1] < 0 || value[1] >= GRID_COLUMNS) {
+          throw new RangeError("State must be a grid coordinate");
+        }
+        state = [...value];
+        movement = { active: false, progress: 1, row: state[0], column: state[1] };
+        renderWorld();
+      },
+      runEpisode,
+      beginFastRun,
+      trainEpisodes,
+      runAnimatedStep,
+      performAnimatedStep,
+      returnChartLayout,
+      visualSnapshot,
+    });
+
+    const landingScreen = document.querySelector("#landing-screen");
+    const gameScreen = document.querySelector("#game-screen");
+
+    document.querySelector("[data-open-game]").addEventListener("click", () => {
+      landingScreen.hidden = true;
+      gameScreen.hidden = false;
+      renderAll();
+      requestAnimationFrame(renderAll);
+      document.querySelector("#game-title").focus?.();
+    });
+
+    document.querySelector("[data-close-game]").addEventListener("click", () => {
+      cancelAnimatedRun();
+      resetInspector();
+      gameScreen.hidden = true;
+      landingScreen.hidden = false;
+      document.querySelector("[data-open-game]").focus();
+    });
+
+    document.querySelector("#subtitle-toggle").addEventListener("click", (event) => {
+      const subtitle = document.querySelector("#subtitle");
+      const isVisible = !subtitle.hidden;
+      subtitle.hidden = isVisible;
+      event.currentTarget.setAttribute("aria-pressed", String(!isVisible));
+      event.currentTarget.textContent = isVisible ? "Subtitles off" : "Subtitles on";
+    });
+  </script>
+</body>
+</html>
